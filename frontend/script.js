@@ -5,6 +5,7 @@ const TOKEN_KEY = 'cma_token';
 // Global state
 let currentSessionId = null;
 let currentRole = null;
+let currentUsername = null;
 
 // DOM elements
 let chatMessages, chatInput, sendButton, totalCourses, courseTitles;
@@ -40,6 +41,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     setupUploadListeners();
     setupAuthListeners();
+    setupPasswordListeners();
+    setupAdminListeners();
     checkAuth();
 });
 
@@ -107,15 +110,158 @@ function showLogin(message) {
 
 function showApp(user) {
     currentRole = user.role;
+    currentUsername = user.username;
     document.getElementById('loginView').style.display = 'none';
     document.getElementById('appView').style.display = '';  // revert to stylesheet layout
     document.getElementById('currentUser').textContent = `${user.username} (${user.role})`;
-    // Only admins see the upload UI (the server enforces this regardless)
+    // Only admins see the upload + user-management UI (the server enforces this regardless)
+    const isAdmin = user.role === 'admin';
     const addCourse = document.getElementById('addCourseSection');
-    if (addCourse) addCourse.style.display = (user.role === 'admin') ? '' : 'none';
+    if (addCourse) addCourse.style.display = isAdmin ? '' : 'none';
+    const userMgmt = document.getElementById('userMgmtSection');
+    if (userMgmt) userMgmt.style.display = isAdmin ? '' : 'none';
+    if (isAdmin) loadUsers();
     // Initialize chat + course list now that we are authenticated
     createNewSession();
     loadCourseStats();
+}
+
+// ---- Change password (all users) ----
+function setupPasswordListeners() {
+    const btn = document.getElementById('changePwButton');
+    if (btn) btn.addEventListener('click', changePassword);
+}
+
+async function changePassword() {
+    const oldPw = document.getElementById('oldPassword').value;
+    const newPw = document.getElementById('newPassword').value;
+    const confirmPw = document.getElementById('confirmPassword').value;
+    const status = document.getElementById('changePwStatus');
+    const btn = document.getElementById('changePwButton');
+
+    if (!oldPw || !newPw) { status.textContent = '请填写当前密码和新密码'; status.className = 'upload-status error'; return; }
+    if (newPw.length < 6) { status.textContent = '新密码至少 6 位'; status.className = 'upload-status error'; return; }
+    if (newPw !== confirmPw) { status.textContent = '两次输入的新密码不一致'; status.className = 'upload-status error'; return; }
+
+    status.textContent = '提交中…'; status.className = 'upload-status loading'; btn.disabled = true;
+    try {
+        const response = await authFetch(`${API_URL}/auth/change-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ old_password: oldPw, new_password: newPw })
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.detail || '修改失败');
+        }
+        status.textContent = '密码修改成功'; status.className = 'upload-status success';
+        document.getElementById('oldPassword').value = '';
+        document.getElementById('newPassword').value = '';
+        document.getElementById('confirmPassword').value = '';
+    } catch (err) {
+        status.textContent = err.message; status.className = 'upload-status error';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// ---- Admin: user management ----
+function setupAdminListeners() {
+    const btn = document.getElementById('createUserButton');
+    if (btn) btn.addEventListener('click', createUser);
+}
+
+async function loadUsers() {
+    const listEl = document.getElementById('userList');
+    if (!listEl) return;
+    try {
+        const response = await authFetch(`${API_URL}/admin/users`);
+        if (!response.ok) throw new Error('加载用户失败');
+        const users = await response.json();
+        listEl.innerHTML = users.map(u => `
+            <div class="user-row">
+                <span class="user-name">${escapeHtml(u.username)} <span class="user-role">${u.role}</span></span>
+                <span class="user-actions">
+                    <button class="user-action" data-action="reset" data-id="${u.id}" data-name="${escapeHtml(u.username)}">重置密码</button>
+                    <button class="user-action danger" data-action="delete" data-id="${u.id}" data-name="${escapeHtml(u.username)}">删除</button>
+                </span>
+            </div>
+        `).join('');
+        listEl.querySelectorAll('.user-action').forEach(b => {
+            b.addEventListener('click', () => {
+                const id = b.getAttribute('data-id');
+                const name = b.getAttribute('data-name');
+                if (b.getAttribute('data-action') === 'delete') deleteUser(id, name);
+                else resetUserPassword(id, name);
+            });
+        });
+    } catch (e) {
+        listEl.innerHTML = '<span class="no-courses">加载用户失败</span>';
+    }
+}
+
+async function createUser() {
+    const username = document.getElementById('newUsername').value.trim();
+    const password = document.getElementById('newUserPassword').value;
+    const role = document.getElementById('newUserRole').value;
+    const status = document.getElementById('createUserStatus');
+    const btn = document.getElementById('createUserButton');
+
+    if (!username || !password) { status.textContent = '请填写用户名和密码'; status.className = 'upload-status error'; return; }
+    if (password.length < 6) { status.textContent = '密码至少 6 位'; status.className = 'upload-status error'; return; }
+
+    status.textContent = '创建中…'; status.className = 'upload-status loading'; btn.disabled = true;
+    try {
+        const response = await authFetch(`${API_URL}/admin/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password, role })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || '创建失败');
+        status.textContent = `已创建：${data.username} (${data.role})`; status.className = 'upload-status success';
+        document.getElementById('newUsername').value = '';
+        document.getElementById('newUserPassword').value = '';
+        await loadUsers();
+    } catch (err) {
+        status.textContent = err.message; status.className = 'upload-status error';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function deleteUser(id, name) {
+    if (!confirm(`确定删除用户 "${name}"？`)) return;
+    try {
+        const response = await authFetch(`${API_URL}/admin/users/${id}`, { method: 'DELETE' });
+        if (!response.ok && response.status !== 204) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.detail || '删除失败');
+        }
+        await loadUsers();
+    } catch (err) {
+        alert(err.message);
+    }
+}
+
+async function resetUserPassword(id, name) {
+    const newPw = prompt(`为用户 "${name}" 设置新密码（≥6位）：`);
+    if (newPw === null) return;
+    if (newPw.length < 6) { alert('密码至少 6 位'); return; }
+    try {
+        const response = await authFetch(`${API_URL}/admin/users/${id}/password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ new_password: newPw })
+        });
+        if (!response.ok && response.status !== 204) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.detail || '重置失败');
+        }
+        alert(`已重置 "${name}" 的密码`);
+    } catch (err) {
+        alert(err.message);
+    }
 }
 
 // Event Listeners

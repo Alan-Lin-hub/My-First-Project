@@ -874,3 +874,70 @@ details[open] .suggested-header::before {
     color: var(--text-primary);
     border-color: var(--primary-color);
 }
+
+/* Password / admin form inputs */
+.pw-input {
+    width: 100%;
+    padding: 9px 12px;
+    margin-bottom: 8px;
+    background-color: var(--background);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-size: 0.88rem;
+}
+
+.pw-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* User management list */
+.user-list {
+    margin-bottom: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.user-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    background-color: var(--background);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    font-size: 0.82rem;
+}
+
+.user-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.user-role {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1px 5px;
+    margin-left: 4px;
+}
+
+.user-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.user-action {
+    padding: 3px 8px;
+    background-color: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-size: 0.74rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.user-action:hover { color: var(--text-primary); border-color: var(--primary-color); }
+.user-action.danger:hover { color: #f87171; border-color: #f87171; }
+
+.user-create { border-top: 1px solid var(--border-color); padding-top: 10px; }

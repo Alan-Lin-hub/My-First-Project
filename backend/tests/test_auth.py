@@ -94,6 +94,13 @@ def test_list_and_delete(store):
     assert not any(x["username"] == "bob" for x in store.list_users())
 
 
+def test_update_password(store):
+    u = store.create_user("bob", "oldpw")
+    assert store.update_password(u["id"], "newpw123") is True
+    assert store.verify_login("bob", "oldpw") is None
+    assert store.verify_login("bob", "newpw123")["username"] == "bob"
+
+
 # --------------------------------------------------------------------------- #
 # Endpoint role enforcement
 # --------------------------------------------------------------------------- #
@@ -185,3 +192,61 @@ def test_admin_user_management(client):
     # Listing requires admin too
     assert client.get("/api/admin/users").status_code == 401
     assert client.get("/api/admin/users", headers=_bearer("admin", "admin")).status_code == 200
+
+
+def test_change_own_password(client):
+    r = client.post(
+        "/api/auth/change-password",
+        json={"old_password": "userpw", "new_password": "newpw123"},
+        headers=_bearer("regular", "user"),
+    )
+    assert r.status_code == 204
+    # Old password rejected, new one accepted
+    assert client.post("/api/auth/login", json={"username": "regular", "password": "userpw"}).status_code == 401
+    assert client.post("/api/auth/login", json={"username": "regular", "password": "newpw123"}).status_code == 200
+
+
+def test_change_password_wrong_old(client):
+    r = client.post(
+        "/api/auth/change-password",
+        json={"old_password": "WRONG", "new_password": "newpw123"},
+        headers=_bearer("regular", "user"),
+    )
+    assert r.status_code == 400
+
+
+def test_change_password_too_short(client):
+    r = client.post(
+        "/api/auth/change-password",
+        json={"old_password": "userpw", "new_password": "123"},
+        headers=_bearer("regular", "user"),
+    )
+    assert r.status_code == 400
+
+
+def test_change_password_requires_auth(client):
+    assert client.post(
+        "/api/auth/change-password",
+        json={"old_password": "x", "new_password": "yyyyyy"},
+    ).status_code == 401
+
+
+def test_admin_resets_user_password(client):
+    users = client.get("/api/admin/users", headers=_bearer("admin", "admin")).json()
+    uid = next(u["id"] for u in users if u["username"] == "regular")
+    r = client.post(
+        f"/api/admin/users/{uid}/password",
+        json={"new_password": "reset123"},
+        headers=_bearer("admin", "admin"),
+    )
+    assert r.status_code == 204
+    assert client.post("/api/auth/login", json={"username": "regular", "password": "reset123"}).status_code == 200
+
+
+def test_non_admin_cannot_reset_password(client):
+    r = client.post(
+        "/api/admin/users/1/password",
+        json={"new_password": "reset123"},
+        headers=_bearer("regular", "user"),
+    )
+    assert r.status_code == 403

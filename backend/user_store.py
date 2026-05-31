@@ -101,6 +101,16 @@ class UserStore:
             cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
             return cur.rowcount > 0
 
+    def update_password(self, user_id: int, new_password: str) -> bool:
+        if not new_password:
+            raise ValueError("password is required")
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (hash_password(new_password), user_id),
+            )
+            return cur.rowcount > 0
+
     def verify_login(self, username: str, password: str) -> Optional[Dict[str, Any]]:
         """Return the user dict if credentials are valid, else None."""
         user = self.get_by_username(username)

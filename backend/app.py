@@ -97,6 +97,24 @@ class CreateUserRequest(BaseModel):
     password: str
     role: str = "user"
 
+class ChangePasswordRequest(BaseModel):
+    """Request model for a user changing their own password"""
+    old_password: str
+    new_password: str
+
+class ResetPasswordRequest(BaseModel):
+    """Request model for an admin resetting another user's password"""
+    new_password: str
+
+MIN_PASSWORD_LENGTH = 6
+
+def _validate_password(password: str):
+    if len(password or "") < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+        )
+
 # API Endpoints
 
 # ---- Auth -------------------------------------------------------------- #
@@ -113,6 +131,15 @@ async def login(request: LoginRequest):
 async def whoami(current=Depends(get_current_user)):
     """Return the currently authenticated user (drives frontend role gating)."""
     return UserOut(id=current["id"], username=current["username"], role=current["role"])
+
+@app.post("/api/auth/change-password", status_code=204)
+async def change_password(request: ChangePasswordRequest, current=Depends(get_current_user)):
+    """Change the current user's own password (requires the old password)."""
+    if not user_store.verify_login(current["username"], request.old_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    _validate_password(request.new_password)
+    user_store.update_password(current["id"], request.new_password)
+    return None
 
 # ---- Admin: user management -------------------------------------------- #
 @app.get("/api/admin/users", response_model=List[UserOut])
@@ -138,6 +165,14 @@ async def delete_user(user_id: int, admin=Depends(require_admin)):
     if target["role"] == "admin" and user_store.count_admins() <= 1:
         raise HTTPException(status_code=400, detail="Cannot delete the last admin account")
     user_store.delete_user(user_id)
+    return None
+
+@app.post("/api/admin/users/{user_id}/password", status_code=204)
+async def reset_user_password(user_id: int, request: ResetPasswordRequest, admin=Depends(require_admin)):
+    """Reset another user's password (admin only)."""
+    _validate_password(request.new_password)
+    if not user_store.update_password(user_id, request.new_password):
+        raise HTTPException(status_code=404, detail="User not found")
     return None
 
 @app.post("/api/query", response_model=QueryResponse)

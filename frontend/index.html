@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Course Materials Assistant</title>
-    <link rel="stylesheet" href="style.css?v=11">
+    <link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
     <div class="container">
@@ -37,6 +37,20 @@
                     <button id="logoutButton" class="logout-button">退出</button>
                 </div>
 
+                <!-- Change password (all users) -->
+                <div class="sidebar-section">
+                    <details class="upload-collapsible">
+                        <summary class="upload-header">修改密码</summary>
+                        <div class="upload-content">
+                            <input type="password" id="oldPassword" class="pw-input" placeholder="当前密码" autocomplete="current-password">
+                            <input type="password" id="newPassword" class="pw-input" placeholder="新密码（≥6位）" autocomplete="new-password">
+                            <input type="password" id="confirmPassword" class="pw-input" placeholder="确认新密码" autocomplete="new-password">
+                            <button id="changePwButton" class="upload-button">提交</button>
+                            <div id="changePwStatus" class="upload-status"></div>
+                        </div>
+                    </details>
+                </div>
+
                 <!-- Course Stats -->
                 <div class="sidebar-section">
                     <details class="stats-collapsible">
@@ -64,6 +78,26 @@
                             <button id="uploadButton" class="upload-button">Upload document</button>
                             <p class="upload-hint">.txt, .pdf or .docx — ingested immediately</p>
                             <div id="uploadStatus" class="upload-status"></div>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- User management (admins only — hidden by default, shown by JS) -->
+                <div class="sidebar-section" id="userMgmtSection" style="display:none">
+                    <details class="upload-collapsible">
+                        <summary class="upload-header">用户管理</summary>
+                        <div class="upload-content">
+                            <div id="userList" class="user-list"></div>
+                            <div class="user-create">
+                                <input type="text" id="newUsername" class="pw-input" placeholder="用户名" autocomplete="off">
+                                <input type="password" id="newUserPassword" class="pw-input" placeholder="密码（≥6位）" autocomplete="new-password">
+                                <select id="newUserRole" class="pw-input">
+                                    <option value="user">普通用户</option>
+                                    <option value="admin">管理员</option>
+                                </select>
+                                <button id="createUserButton" class="upload-button">新建用户</button>
+                                <div id="createUserStatus" class="upload-status"></div>
+                            </div>
                         </div>
                     </details>
                 </div>
@@ -107,6 +141,6 @@
 
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="script.js?v=11"></script>
+    <script src="script.js?v=12"></script>
 </body>
 </html>

@@ -76,9 +76,13 @@ gitignored); passwords are bcrypt-hashed.
   401) and `require_admin` (else 403). `/api/query` and `/api/courses` require
   login; `/api/courses/upload` and all `/api/admin/*` require admin.
 - **Roles**: `user` (query/browse) and `admin` (+ upload + user management via
-  `POST|GET|DELETE /api/admin/users`). No public registration — the first admin
-  is **seeded on startup** from `ADMIN_USERNAME`/`ADMIN_PASSWORD` if no admin
-  exists; admins create everyone else.
+  `POST|GET|DELETE /api/admin/users` and `POST /api/admin/users/{id}/password`
+  to reset a password). No public registration — the first admin is **seeded on
+  startup** from `ADMIN_USERNAME`/`ADMIN_PASSWORD` if no admin exists; admins
+  create everyone else. Any logged-in user changes their own password via
+  `POST /api/auth/change-password` (min length 6). Note: changing
+  `ADMIN_PASSWORD` after the admin exists does NOT re-seed — use change-password
+  / admin reset instead.
 - **Frontend gating** (`#addCourseSection` shown only for admins) is UX only —
   the server is the real gate.
 - **Config/env** (`config.py`): `JWT_SECRET` (required; warns if empty),
