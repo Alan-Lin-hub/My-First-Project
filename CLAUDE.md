@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-A Retrieval-Augmented Generation (RAG) system that answers questions about course materials. Course documents are chunked and embedded into ChromaDB; user queries are answered by Claude using a **tool-based search** approach (Claude decides whether to search, rather than results being stuffed into the prompt).
+A Retrieval-Augmented Generation (RAG) system that answers questions about course materials. Course documents are chunked and embedded into ChromaDB; user queries are answered by **DeepSeek** (via its OpenAI-compatible API) using a **tool-based search** approach (the model decides whether to search, rather than results being stuffed into the prompt).
 
 ## Commands
 
@@ -16,18 +16,23 @@ uv sync
 ./run.sh
 # or manually:
 cd backend && uv run uvicorn app:app --reload --port 8000
+
+# Run the tests (mocked — no API key/network needed)
+uv run pytest
+# Include the integration tests (real DeepSeek API + ChromaDB):
+RUN_INTEGRATION=1 uv run pytest        # or set DEEPSEEK_API_KEY
 ```
 
 - **Always use `uv` to run the server and manage dependencies — never invoke `pip` directly.**
-- Requires `ANTHROPIC_API_KEY` in a `.env` file at the repo root (copy from `.env.example`).
-- No test suite, linter, or build step exists in this repo.
+- Requires `DEEPSEEK_API_KEY` in a `.env` file at the repo root (copy from `.env.example`). The LLM is DeepSeek's OpenAI-compatible API (`config.DEEPSEEK_BASE_URL`, model `deepseek-chat`).
+- Tests live in `backend/tests/` (pytest). Unit tests mock the DeepSeek client and a fake vector store; tests marked `integration` are skipped unless `RUN_INTEGRATION=1` or `DEEPSEEK_API_KEY` is set. No linter or build step exists.
 - `main.py` at the root is an unused placeholder — the real entrypoint is `backend/app.py`.
 
 ## Architecture
 
 ### Request flow (a query end-to-end)
 
-`frontend/script.js` (`sendMessage`) → `POST /api/query` → `backend/app.py` (`query_documents`) → `RAGSystem.query` → `AIGenerator.generate_response` → **Claude API (call 1, with tools)** → if `stop_reason == "tool_use"`, `CourseSearchTool.execute` → `VectorStore.search` (ChromaDB) → **Claude API (call 2, no tools)** to synthesize the answer → response returned with `sources`.
+`frontend/script.js` (`sendMessage`) → `POST /api/query` → `backend/app.py` (`query_documents`) → `RAGSystem.query` → `AIGenerator.generate_response` → **DeepSeek API (call 1, with tools)** → if the response has `message.tool_calls`, `CourseSearchTool.execute` → `VectorStore.search` (ChromaDB) → **DeepSeek API (call 2, no tools)** to synthesize the answer → response returned with `sources`.
 
 `RAGSystem` (`backend/rag_system.py`) is the central orchestrator that wires together all components in its constructor.
 
@@ -39,16 +44,21 @@ cd backend && uv run uvicorn app:app --reload --port 8000
 
 ### Tool-based search is single-pass
 
-`AIGenerator` (`backend/ai_generator.py`) makes **exactly two sequential Claude calls** when a tool is used (`_handle_tool_execution`): one to trigger the search, one to synthesize. There is **no tool-call loop** — Claude can search at most once per query (also enforced by the system prompt). Multi-step retrieval (e.g. comparing two courses) is not currently possible; this is the main extension point.
+`AIGenerator` (`backend/ai_generator.py`) makes **exactly two sequential DeepSeek calls** when a tool is used (`_handle_tool_execution`): one to trigger the search, one to synthesize. There is **no tool-call loop** — the model can search at most once per query (also enforced by the system prompt). Multi-step retrieval (e.g. comparing two courses) is not currently possible; this is the main extension point.
+
+DeepSeek uses the **OpenAI-compatible** chat-completions API (the `openai` SDK pointed at `DEEPSEEK_BASE_URL`). The tools in `search_tools.py` still return **Anthropic-style** definitions (`input_schema`); `AIGenerator._to_openai_tools` converts them to OpenAI `function`/`parameters` format at call time, so `search_tools.py` stays API-agnostic. Tool-call arguments come back as a JSON string and are `json.loads`-ed before dispatch.
 
 Tools are pluggable via the `Tool` ABC and `ToolManager` in `backend/search_tools.py`. Sources for the UI are tracked as side-state on the tool (`last_sources`), retrieved by `RAGSystem.query` after generation, then reset.
 
 ### Document ingestion
 
-Documents in `docs/` are loaded on startup (`app.py` `startup_event`) and processed by `DocumentProcessor` (`backend/document_processor.py`):
-- Expected format: first 3 lines are `Course Title:` / `Course Link:` / `Course Instructor:`, followed by `Lesson N:` markers (each optionally followed by `Lesson Link:`).
+Documents in `docs/` are loaded on startup (`app.py` `startup_event`) and processed by `DocumentProcessor` (`backend/document_processor.py`). They can also be uploaded at runtime via **`POST /api/courses/upload`** (multipart), which saves the file to `docs/` and ingests it immediately (`RAGSystem.add_or_update_course_document`, which **replaces** an existing same-title course rather than erroring on duplicate IDs).
+- File types: `.txt`, `.pdf` (via `pypdf`), `.docx` (via `python-docx`). `read_file` dispatches by extension.
+- **Structured** format: first 3 lines are `Course Title:` / `Course Link:` / `Course Instructor:`, followed by `Lesson N:` markers (each optionally followed by `Lesson Link:`).
+- **Unstructured** docs (no `Course Title:` header — typical for arbitrary PDFs/DOCX): the **filename (without extension) becomes the course title**, no leading lines are dropped, and the whole document is chunked with `lesson_number` unset.
 - Text is split into ~800-char sentence-based chunks with ~100-char overlap (`CHUNK_SIZE` / `CHUNK_OVERLAP` in `config.py`), and each chunk is prefixed with course/lesson context before embedding.
-- **Deduplication is by course title** (the title is also the ChromaDB ID). Existing courses are skipped on reload unless `clear_existing=True`.
+- **Deduplication is by course title** (the title is also the ChromaDB ID). On startup reload existing courses are skipped unless `clear_existing=True`; the upload endpoint instead replaces them.
+- **ChromaDB metadata cannot be `None`** — `VectorStore.add_course_metadata` / `add_course_content` omit absent fields (instructor, course_link, lesson_number) instead of writing `None`.
 
 ### Sessions
 

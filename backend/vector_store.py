@@ -147,15 +147,21 @@ class VectorStore:
                 "lesson_link": lesson.lesson_link
             })
         
+        # ChromaDB metadata values must not be None — only include optional
+        # fields (instructor, course_link) when they are actually present.
+        catalog_metadata = {
+            "title": course.title,
+            "lessons_json": json.dumps(lessons_metadata),  # Serialize as JSON string
+            "lesson_count": len(course.lessons),
+        }
+        if course.instructor:
+            catalog_metadata["instructor"] = course.instructor
+        if course.course_link:
+            catalog_metadata["course_link"] = course.course_link
+
         self.course_catalog.add(
             documents=[course_text],
-            metadatas=[{
-                "title": course.title,
-                "instructor": course.instructor,
-                "course_link": course.course_link,
-                "lessons_json": json.dumps(lessons_metadata),  # Serialize as JSON string
-                "lesson_count": len(course.lessons)
-            }],
+            metadatas=[catalog_metadata],
             ids=[course.title]
         )
     
@@ -165,11 +171,18 @@ class VectorStore:
             return
         
         documents = [chunk.content for chunk in chunks]
-        metadatas = [{
-            "course_title": chunk.course_title,
-            "lesson_number": chunk.lesson_number,
-            "chunk_index": chunk.chunk_index
-        } for chunk in chunks]
+        # ChromaDB metadata values must not be None. Chunks from documents
+        # without "Lesson N:" markers have lesson_number=None, so only include
+        # that key when it is present.
+        metadatas = []
+        for chunk in chunks:
+            meta = {
+                "course_title": chunk.course_title,
+                "chunk_index": chunk.chunk_index,
+            }
+            if chunk.lesson_number is not None:
+                meta["lesson_number"] = chunk.lesson_number
+            metadatas.append(meta)
         # Use title with chunk index for unique IDs
         ids = [f"{chunk.course_title.replace(' ', '_')}_{chunk.chunk_index}" for chunk in chunks]
         
@@ -179,6 +192,14 @@ class VectorStore:
             ids=ids
         )
     
+    def delete_course(self, course_title: str):
+        """Remove a single course (its catalog entry and all its content chunks)."""
+        try:
+            self.course_catalog.delete(ids=[course_title])
+            self.course_content.delete(where={"course_title": course_title})
+        except Exception as e:
+            print(f"Error deleting course '{course_title}': {e}")
+
     def clear_all_data(self):
         """Clear all data from both collections"""
         try:

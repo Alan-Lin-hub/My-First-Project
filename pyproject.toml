@@ -6,10 +6,24 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "chromadb==1.0.15",
-    "anthropic==0.58.2",
     "sentence-transformers==5.0.0",
     "fastapi==0.116.1",
     "uvicorn==0.35.0",
     "python-multipart==0.0.20",
     "python-dotenv==1.1.1",
+    "openai>=2.38.0",
+    "pypdf>=6.12.2",
+    "python-docx>=1.2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]          # backend uses flat imports (from vector_store import ...)
+testpaths = ["backend/tests"]
+markers = [
+    "integration: needs a real DEEPSEEK_API_KEY / network access",
 ]

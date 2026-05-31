@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     courseTitles = document.getElementById('courseTitles');
     
     setupEventListeners();
+    setupUploadListeners();
     createNewSession();
     loadCourseStats();
 });
@@ -40,6 +41,50 @@ function setupEventListeners() {
     });
 }
 
+
+// Course Upload
+function setupUploadListeners() {
+    const uploadButton = document.getElementById('uploadButton');
+    const fileInput = document.getElementById('courseFileInput');
+    const status = document.getElementById('uploadStatus');
+    if (!uploadButton || !fileInput) return;
+
+    uploadButton.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files[0];
+        if (!file) return;
+
+        status.textContent = `Uploading "${file.name}"…`;
+        status.className = 'upload-status loading';
+        uploadButton.disabled = true;
+
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await fetch(`${API_URL}/courses/upload`, {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Upload failed');
+
+            const verb = data.replaced ? 'Updated' : 'Added';
+            status.textContent = `${verb}: ${data.course_title} — ${data.lessons} lessons, ${data.chunks} chunks`;
+            status.className = 'upload-status success';
+
+            // Refresh the course list so the new/updated course shows up
+            await loadCourseStats();
+        } catch (error) {
+            status.textContent = `Error: ${error.message}`;
+            status.className = 'upload-status error';
+        } finally {
+            uploadButton.disabled = false;
+            fileInput.value = '';
+        }
+    });
+}
 
 // Chat Functions
 async function sendMessage() {
@@ -71,7 +116,15 @@ async function sendMessage() {
             })
         });
 
-        if (!response.ok) throw new Error('Query failed');
+        if (!response.ok) {
+            // Surface the backend's error detail (e.g. missing API key) instead of a generic message
+            let detail = 'Query failed';
+            try {
+                const errData = await response.json();
+                if (errData && errData.detail) detail = errData.detail;
+            } catch (e) { /* response had no JSON body */ }
+            throw new Error(detail);
+        }
 
         const data = await response.json();
         

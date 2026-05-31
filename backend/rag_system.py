@@ -16,7 +16,7 @@ class RAGSystem:
         # Initialize core components
         self.document_processor = DocumentProcessor(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
         self.vector_store = VectorStore(config.CHROMA_PATH, config.EMBEDDING_MODEL, config.MAX_RESULTS)
-        self.ai_generator = AIGenerator(config.ANTHROPIC_API_KEY, config.ANTHROPIC_MODEL)
+        self.ai_generator = AIGenerator(config.DEEPSEEK_API_KEY, config.DEEPSEEK_MODEL, config.DEEPSEEK_BASE_URL)
         self.session_manager = SessionManager(config.MAX_HISTORY)
         
         # Initialize search tools
@@ -49,6 +49,33 @@ class RAGSystem:
             print(f"Error processing course document {file_path}: {e}")
             return None, 0
     
+    def add_or_update_course_document(self, file_path: str) -> Dict:
+        """
+        Process a single document and (re)ingest it immediately.
+
+        If a course with the same title already exists, its old data is removed
+        first so the upload acts as a replace/update rather than erroring on
+        duplicate IDs.
+
+        Returns a summary dict (raises on a malformed document).
+        """
+        course, course_chunks = self.document_processor.process_course_document(file_path)
+
+        existing_titles = set(self.vector_store.get_existing_course_titles())
+        replaced = course.title in existing_titles
+        if replaced:
+            self.vector_store.delete_course(course.title)
+
+        self.vector_store.add_course_metadata(course)
+        self.vector_store.add_course_content(course_chunks)
+
+        return {
+            "course_title": course.title,
+            "lessons": len(course.lessons),
+            "chunks": len(course_chunks),
+            "replaced": replaced,
+        }
+
     def add_course_folder(self, folder_path: str, clear_existing: bool = False) -> Tuple[int, int]:
         """
         Add all course documents from a folder.

@@ -716,3 +716,55 @@ details[open] .suggested-header::before {
         width: 280px;
     }
 }
+
+/* Course Upload */
+.upload-header {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--text-primary);
+    padding: 4px 0;
+    list-style: none;
+}
+
+.upload-content {
+    margin-top: 10px;
+}
+
+.upload-button {
+    width: 100%;
+    padding: 10px 14px;
+    background-color: var(--primary-color);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.upload-button:hover:not(:disabled) {
+    background-color: var(--primary-hover);
+}
+
+.upload-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.upload-hint {
+    margin-top: 6px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.upload-status {
+    margin-top: 8px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.upload-status.loading { color: var(--text-secondary); }
+.upload-status.success { color: #4ade80; }
+.upload-status.error   { color: #f87171; }

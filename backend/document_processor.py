@@ -11,7 +11,13 @@ class DocumentProcessor:
         self.chunk_overlap = chunk_overlap
     
     def read_file(self, file_path: str) -> str:
-        """Read content from file with UTF-8 encoding"""
+        """Read text content from a file, parsing PDF/DOCX by extension."""
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.pdf':
+            return self._read_pdf(file_path)
+        if ext == '.docx':
+            return self._read_docx(file_path)
+        # Plain text (.txt and anything else)
         try:
             with open(file_path, 'r', encoding='utf-8') as file:
                 return file.read()
@@ -19,6 +25,20 @@ class DocumentProcessor:
             # If UTF-8 fails, try with error handling
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
                 return file.read()
+
+    def _read_pdf(self, file_path: str) -> str:
+        """Extract text from a PDF, one page per block."""
+        from pypdf import PdfReader
+        reader = PdfReader(file_path)
+        pages = [(page.extract_text() or "") for page in reader.pages]
+        return "\n".join(pages).strip()
+
+    def _read_docx(self, file_path: str) -> str:
+        """Extract text from a .docx, one paragraph per line."""
+        import docx
+        document = docx.Document(file_path)
+        paragraphs = [p.text for p in document.paragraphs]
+        return "\n".join(paragraphs).strip()
     
 
 
@@ -108,17 +128,19 @@ class DocumentProcessor:
         lines = content.strip().split('\n')
         
         # Extract course metadata from first three lines
-        course_title = filename  # Default fallback
+        # Default title: the file name without extension. Used when the document
+        # has no "Course Title:" header (e.g. an arbitrary PDF/DOCX upload).
+        course_title = os.path.splitext(filename)[0]
         course_link = None
         instructor_name = "Unknown"
-        
-        # Parse course title from first line
+
+        # A document is "structured" when its first line is a Course Title: header.
+        has_header = False
         if len(lines) >= 1 and lines[0].strip():
             title_match = re.match(r'^Course Title:\s*(.+)$', lines[0].strip(), re.IGNORECASE)
             if title_match:
                 course_title = title_match.group(1).strip()
-            else:
-                course_title = lines[0].strip()
+                has_header = True
         
         # Parse remaining lines for course metadata
         for i in range(1, min(len(lines), 4)):  # Check first 4 lines for metadata
@@ -153,10 +175,14 @@ class DocumentProcessor:
         lesson_content = []
         chunk_counter = 0
         
-        # Start processing from line 4 (after metadata)
-        start_index = 3
-        if len(lines) > 3 and not lines[3].strip():
-            start_index = 4  # Skip empty line after instructor
+        # Structured docs: skip the 3 metadata lines (+ optional blank line).
+        # Unstructured docs (no header): use all content, drop nothing.
+        if has_header:
+            start_index = 3
+            if len(lines) > 3 and not lines[3].strip():
+                start_index = 4  # Skip empty line after instructor
+        else:
+            start_index = 0
         
         i = start_index
         while i < len(lines):

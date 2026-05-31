@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Course Materials Assistant</title>
-    <link rel="stylesheet" href="style.css?v=9">
+    <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
     <div class="container">
@@ -33,6 +33,19 @@
                                     <span class="loading">Loading...</span>
                                 </div>
                             </div>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- Add a Course -->
+                <div class="sidebar-section">
+                    <details class="upload-collapsible">
+                        <summary class="upload-header">Add a course</summary>
+                        <div class="upload-content">
+                            <input type="file" id="courseFileInput" accept=".txt,.pdf,.docx" hidden>
+                            <button id="uploadButton" class="upload-button">Upload document</button>
+                            <p class="upload-hint">.txt, .pdf or .docx — ingested immediately</p>
+                            <div id="uploadStatus" class="upload-status"></div>
                         </div>
                     </details>
                 </div>
@@ -76,6 +89,6 @@
 
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="script.js?v=9"></script>
+    <script src="script.js?v=10"></script>
 </body>
 </html>
