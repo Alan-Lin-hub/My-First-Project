@@ -1,7 +1,7 @@
 import warnings
 warnings.filterwarnings("ignore", message="resource_tracker: There appear to be.*")
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -16,6 +16,9 @@ ALLOWED_UPLOAD_EXTENSIONS = (".txt", ".pdf", ".docx")
 
 from config import config
 from rag_system import RAGSystem
+from user_store import UserStore
+import auth
+from auth import get_current_user, require_admin, create_access_token
 
 # Initialize FastAPI app
 app = FastAPI(title="Course Materials RAG System", root_path="")
@@ -26,18 +29,23 @@ app.add_middleware(
     allowed_hosts=["*"]
 )
 
-# Enable CORS with proper settings for proxy
+# Enable CORS. In production set CORS_ORIGINS to your real frontend origin(s),
+# comma-separated, instead of the permissive "*" default.
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    # We authenticate with Bearer tokens (not cookies), so credentials aren't needed.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
-# Initialize RAG system
+# Initialize RAG system and user store
 rag_system = RAGSystem(config)
+user_store = UserStore(config.USERS_DB_PATH)
+auth.set_user_store(user_store)
 
 # Pydantic models for request/response
 class QueryRequest(BaseModel):
@@ -64,10 +72,76 @@ class CourseUploadResponse(BaseModel):
     replaced: bool
     filename: str
 
+class LoginRequest(BaseModel):
+    """Request model for login"""
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    """Response model for a successful login"""
+    access_token: str
+    token_type: str = "bearer"
+    username: str
+    role: str
+
+class UserOut(BaseModel):
+    """Public-safe user representation (never includes the password hash)"""
+    id: int
+    username: str
+    role: str
+    created_at: Optional[str] = None
+
+class CreateUserRequest(BaseModel):
+    """Request model for admin-created users"""
+    username: str
+    password: str
+    role: str = "user"
+
 # API Endpoints
 
+# ---- Auth -------------------------------------------------------------- #
+@app.post("/api/auth/login", response_model=TokenResponse)
+async def login(request: LoginRequest):
+    """Authenticate with username/password and receive a JWT."""
+    user = user_store.verify_login(request.username, request.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_access_token(username=user["username"], role=user["role"])
+    return TokenResponse(access_token=token, username=user["username"], role=user["role"])
+
+@app.get("/api/auth/me", response_model=UserOut)
+async def whoami(current=Depends(get_current_user)):
+    """Return the currently authenticated user (drives frontend role gating)."""
+    return UserOut(id=current["id"], username=current["username"], role=current["role"])
+
+# ---- Admin: user management -------------------------------------------- #
+@app.get("/api/admin/users", response_model=List[UserOut])
+async def list_users(admin=Depends(require_admin)):
+    """List all users (admin only)."""
+    return [UserOut(**u) for u in user_store.list_users()]
+
+@app.post("/api/admin/users", response_model=UserOut, status_code=201)
+async def create_user(request: CreateUserRequest, admin=Depends(require_admin)):
+    """Create a new user with a role (admin only)."""
+    try:
+        user = user_store.create_user(request.username, request.password, request.role)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return UserOut(**user)
+
+@app.delete("/api/admin/users/{user_id}", status_code=204)
+async def delete_user(user_id: int, admin=Depends(require_admin)):
+    """Delete a user (admin only). Refuses to remove the last admin."""
+    target = next((u for u in user_store.list_users() if u["id"] == user_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target["role"] == "admin" and user_store.count_admins() <= 1:
+        raise HTTPException(status_code=400, detail="Cannot delete the last admin account")
+    user_store.delete_user(user_id)
+    return None
+
 @app.post("/api/query", response_model=QueryResponse)
-async def query_documents(request: QueryRequest):
+async def query_documents(request: QueryRequest, current=Depends(get_current_user)):
     """Process a query and return response with sources"""
     # Fail fast with a clear message if the API key is not configured
     if not config.DEEPSEEK_API_KEY:
@@ -98,7 +172,7 @@ async def query_documents(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/courses", response_model=CourseStats)
-async def get_course_stats():
+async def get_course_stats(current=Depends(get_current_user)):
     """Get course analytics and statistics"""
     try:
         analytics = rag_system.get_course_analytics()
@@ -110,8 +184,8 @@ async def get_course_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/courses/upload", response_model=CourseUploadResponse)
-async def upload_course(file: UploadFile = File(...)):
-    """Upload a course document, save it to docs/, and ingest it immediately."""
+async def upload_course(file: UploadFile = File(...), admin=Depends(require_admin)):
+    """Upload a course document, save it to docs/, and ingest it immediately. Admin only."""
     # Validate file type (use only the basename to avoid path traversal)
     filename = os.path.basename(file.filename or "")
     if not filename:
@@ -143,9 +217,19 @@ async def upload_course(file: UploadFile = File(...)):
 
 @app.on_event("startup")
 async def startup_event():
-    """Load initial documents on startup"""
+    """Seed the initial admin and load initial documents on startup"""
     if not config.DEEPSEEK_API_KEY:
         print("WARNING: DEEPSEEK_API_KEY is not set — queries will fail until you add it to .env (see .env.example).")
+
+    if not config.JWT_SECRET:
+        print("WARNING: JWT_SECRET is not set — set a strong random secret in .env before deploying.")
+
+    # Seed the initial admin account if none exists yet
+    if config.ADMIN_PASSWORD:
+        if user_store.seed_admin(config.ADMIN_USERNAME, config.ADMIN_PASSWORD):
+            print(f"Seeded initial admin account: {config.ADMIN_USERNAME}")
+    elif user_store.count_admins() == 0:
+        print("WARNING: no admin exists and ADMIN_PASSWORD is not set — set ADMIN_USERNAME/ADMIN_PASSWORD in .env to create the first admin.")
 
     docs_path = "../docs"
     if os.path.exists(docs_path):

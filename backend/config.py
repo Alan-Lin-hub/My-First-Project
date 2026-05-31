@@ -25,6 +25,15 @@ class Config:
     # Database paths
     CHROMA_PATH: str = "./chroma_db"  # ChromaDB storage location
 
+    # Authentication / RBAC settings
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "")          # REQUIRED in production; signs JWTs
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = int(os.getenv("JWT_EXPIRE_MINUTES", "720"))  # 12h
+    USERS_DB_PATH: str = os.getenv("USERS_DB_PATH", "./users.db")
+    # Initial admin seeded on startup if no admin exists yet
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "")
+
 config = Config()
 
 

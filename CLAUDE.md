@@ -64,6 +64,28 @@ Documents in `docs/` are loaded on startup (`app.py` `startup_event`) and proces
 
 `SessionManager` (`backend/session_manager.py`) holds conversation history **in memory only** (lost on restart), keyed by `session_id`. Defaults to remembering the last `MAX_HISTORY=2` exchanges. The frontend stores `currentSessionId` and passes it back on each query to maintain context.
 
+### Authentication & roles (RBAC)
+
+Login is required for everything. `backend/auth.py` + `backend/user_store.py`
+implement JWT auth over a stdlib-`sqlite3` user store (`backend/users.db`,
+gitignored); passwords are bcrypt-hashed.
+- **Flow**: `POST /api/auth/login` → JWT (HS256, signed with `JWT_SECRET`).
+  The frontend stores it in `localStorage` and sends `Authorization: Bearer …`
+  via `authFetch` in `script.js`; a 401 bounces back to the login view.
+- **Dependencies** (FastAPI): `get_current_user` (decode token → load user, else
+  401) and `require_admin` (else 403). `/api/query` and `/api/courses` require
+  login; `/api/courses/upload` and all `/api/admin/*` require admin.
+- **Roles**: `user` (query/browse) and `admin` (+ upload + user management via
+  `POST|GET|DELETE /api/admin/users`). No public registration — the first admin
+  is **seeded on startup** from `ADMIN_USERNAME`/`ADMIN_PASSWORD` if no admin
+  exists; admins create everyone else.
+- **Frontend gating** (`#addCourseSection` shown only for admins) is UX only —
+  the server is the real gate.
+- **Config/env** (`config.py`): `JWT_SECRET` (required; warns if empty),
+  `JWT_EXPIRE_MINUTES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `USERS_DB_PATH`,
+  `CORS_ORIGINS` (restrict in production). **Deploy behind HTTPS** — Bearer
+  tokens/passwords must not traverse plain HTTP.
+
 ## Conventions & gotchas
 
 - **Config is centralized** in `backend/config.py` (`config` singleton): model name, chunk sizes, `MAX_RESULTS`, `MAX_HISTORY`, ChromaDB path. Change behavior here, not by hardcoding elsewhere.

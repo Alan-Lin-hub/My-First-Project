@@ -1,11 +1,32 @@
 // API base URL - use relative path to work from any host
 const API_URL = '/api';
+const TOKEN_KEY = 'cma_token';
 
 // Global state
 let currentSessionId = null;
+let currentRole = null;
 
 // DOM elements
 let chatMessages, chatInput, sendButton, totalCourses, courseTitles;
+
+// ---- Token helpers ----
+function getToken() { return localStorage.getItem(TOKEN_KEY); }
+function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+// fetch wrapper: attaches the Bearer token and bounces to login on 401
+async function authFetch(url, options = {}) {
+    const opts = { ...options, headers: { ...(options.headers || {}) } };
+    const token = getToken();
+    if (token) opts.headers['Authorization'] = `Bearer ${token}`;
+    const response = await fetch(url, opts);
+    if (response.status === 401) {
+        clearToken();
+        showLogin('登录已过期，请重新登录');
+        throw new Error('Not authenticated');
+    }
+    return response;
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -15,12 +36,87 @@ document.addEventListener('DOMContentLoaded', () => {
     sendButton = document.getElementById('sendButton');
     totalCourses = document.getElementById('totalCourses');
     courseTitles = document.getElementById('courseTitles');
-    
+
     setupEventListeners();
     setupUploadListeners();
+    setupAuthListeners();
+    checkAuth();
+});
+
+// ---- Authentication ----
+function setupAuthListeners() {
+    const loginForm = document.getElementById('loginForm');
+    if (loginForm) loginForm.addEventListener('submit', handleLogin);
+    const logoutButton = document.getElementById('logoutButton');
+    if (logoutButton) logoutButton.addEventListener('click', logout);
+}
+
+async function checkAuth() {
+    const token = getToken();
+    if (!token) { showLogin(); return; }
+    try {
+        const response = await fetch(`${API_URL}/auth/me`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) { clearToken(); showLogin(); return; }
+        showApp(await response.json());
+    } catch (e) {
+        showLogin();
+    }
+}
+
+async function handleLogin(e) {
+    e.preventDefault();
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const errorEl = document.getElementById('loginError');
+    const submitBtn = document.getElementById('loginSubmit');
+    errorEl.textContent = '';
+    submitBtn.disabled = true;
+    try {
+        const response = await fetch(`${API_URL}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || '登录失败');
+        setToken(data.access_token);
+        showApp({ username: data.username, role: data.role });
+    } catch (err) {
+        errorEl.textContent = err.message;
+    } finally {
+        submitBtn.disabled = false;
+    }
+}
+
+function logout() {
+    clearToken();
+    currentRole = null;
+    showLogin();
+}
+
+function showLogin(message) {
+    document.getElementById('loginView').style.display = 'flex';
+    document.getElementById('appView').style.display = 'none';
+    const errorEl = document.getElementById('loginError');
+    if (errorEl) errorEl.textContent = message || '';
+    const pw = document.getElementById('loginPassword');
+    if (pw) pw.value = '';
+}
+
+function showApp(user) {
+    currentRole = user.role;
+    document.getElementById('loginView').style.display = 'none';
+    document.getElementById('appView').style.display = '';  // revert to stylesheet layout
+    document.getElementById('currentUser').textContent = `${user.username} (${user.role})`;
+    // Only admins see the upload UI (the server enforces this regardless)
+    const addCourse = document.getElementById('addCourseSection');
+    if (addCourse) addCourse.style.display = (user.role === 'admin') ? '' : 'none';
+    // Initialize chat + course list now that we are authenticated
     createNewSession();
     loadCourseStats();
-});
+}
 
 // Event Listeners
 function setupEventListeners() {
@@ -63,7 +159,7 @@ function setupUploadListeners() {
             const formData = new FormData();
             formData.append('file', file);
 
-            const response = await fetch(`${API_URL}/courses/upload`, {
+            const response = await authFetch(`${API_URL}/courses/upload`, {
                 method: 'POST',
                 body: formData
             });
@@ -105,7 +201,7 @@ async function sendMessage() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
     try {
-        const response = await fetch(`${API_URL}/query`, {
+        const response = await authFetch(`${API_URL}/query`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -209,7 +305,7 @@ async function createNewSession() {
 async function loadCourseStats() {
     try {
         console.log('Loading course stats...');
-        const response = await fetch(`${API_URL}/courses`);
+        const response = await authFetch(`${API_URL}/courses`);
         if (!response.ok) throw new Error('Failed to load course stats');
         
         const data = await response.json();

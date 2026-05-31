@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>Course Materials Assistant</title>
-    <link rel="stylesheet" href="style.css?v=10">
+    <link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
     <div class="container">
@@ -16,9 +16,27 @@
             <p class="subtitle">Ask questions about courses, instructors, and content</p>
         </header>
 
-        <div class="main-content">
+        <!-- Login view (shown until authenticated) -->
+        <div id="loginView" class="login-view">
+            <form id="loginForm" class="login-card">
+                <h2>Course Materials Assistant</h2>
+                <p class="login-subtitle">请登录以继续</p>
+                <input type="text" id="loginUsername" placeholder="用户名" autocomplete="username" required>
+                <input type="password" id="loginPassword" placeholder="密码" autocomplete="current-password" required>
+                <button type="submit" id="loginSubmit">登录</button>
+                <div id="loginError" class="login-error"></div>
+            </form>
+        </div>
+
+        <div class="main-content" id="appView" style="display:none">
             <!-- Left Sidebar -->
             <aside class="sidebar">
+                <!-- Current user -->
+                <div class="sidebar-section user-bar">
+                    <span id="currentUser" class="current-user"></span>
+                    <button id="logoutButton" class="logout-button">退出</button>
+                </div>
+
                 <!-- Course Stats -->
                 <div class="sidebar-section">
                     <details class="stats-collapsible">
@@ -37,8 +55,8 @@
                     </details>
                 </div>
 
-                <!-- Add a Course -->
-                <div class="sidebar-section">
+                <!-- Add a Course (admins only — hidden by default, shown by JS) -->
+                <div class="sidebar-section" id="addCourseSection" style="display:none">
                     <details class="upload-collapsible">
                         <summary class="upload-header">Add a course</summary>
                         <div class="upload-content">
@@ -89,6 +107,6 @@
 
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="script.js?v=10"></script>
+    <script src="script.js?v=11"></script>
 </body>
 </html>

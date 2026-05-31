@@ -17,6 +17,10 @@ ENV/
 # ChromaDB
 backend/chroma_db/
 
+# User accounts database
+backend/users.db
+users.db
+
 # Uploads
 uploads/
 
