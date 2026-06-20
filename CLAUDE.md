@@ -42,9 +42,9 @@ RUN_INTEGRATION=1 uv run pytest        # or set DEEPSEEK_API_KEY
 1. `course_catalog` — course metadata (title, instructor, lessons as JSON). A fuzzy course name like "MCP" is first **semantically resolved** to a full course title here (`_resolve_course_name`).
 2. `course_content` — the actual text chunks. The resolved title + optional lesson number become a filter (`_build_filter`) for the content query.
 
-### Tool-based search is single-pass
+### Tool-based search is a bounded multi-round loop
 
-`AIGenerator` (`backend/ai_generator.py`) makes **exactly two sequential DeepSeek calls** when a tool is used (`_handle_tool_execution`): one to trigger the search, one to synthesize. There is **no tool-call loop** — the model can search at most once per query (also enforced by the system prompt). Multi-step retrieval (e.g. comparing two courses) is not currently possible; this is the main extension point.
+`AIGenerator` (`backend/ai_generator.py`) runs a **tool-call loop** in `generate_response`: each round calls DeepSeek with tools (`tool_choice="auto"`); if the model requests a search, `_execute_tool_calls` runs it and appends the results, then the loop calls again. The loop ends when the model returns plain text (no `tool_calls`), or after `config.MAX_TOOL_ROUNDS` rounds — in which case one final no-tools call forces a synthesized answer. This allows **multi-step retrieval** (e.g. comparing two courses); the system prompt tells the model it may search more than once but to stop as soon as it can answer. A query with no tools available is a single completion call.
 
 DeepSeek uses the **OpenAI-compatible** chat-completions API (the `openai` SDK pointed at `DEEPSEEK_BASE_URL`). The tools in `search_tools.py` still return **Anthropic-style** definitions (`input_schema`); `AIGenerator._to_openai_tools` converts them to OpenAI `function`/`parameters` format at call time, so `search_tools.py` stays API-agnostic. Tool-call arguments come back as a JSON string and are `json.loads`-ed before dispatch.
 

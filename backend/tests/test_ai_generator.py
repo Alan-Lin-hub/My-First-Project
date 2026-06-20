@@ -73,11 +73,45 @@ def test_tool_use_executes_tool_then_synthesizes(text_response, tool_use_respons
     assert create.call_count == 2
     # The tool actually ran against the store with the model-supplied args
     assert fake_store.calls[0]["query"] == "MCP servers"
-    # The second (synthesis) call carries no tools
-    assert "tools" not in create.call_args_list[1].kwargs
-    # The synthesis call includes a tool-result message
+    # The second call still offers tools (the model simply chose not to search
+    # again and returned text) — that's how the loop terminates.
     final_messages = create.call_args_list[1].kwargs["messages"]
     assert any(m.get("role") == "tool" for m in final_messages if isinstance(m, dict))
+
+
+def test_multi_step_two_searches_then_synthesize(text_response, tool_use_response, tool_call, fake_store):
+    """The model can search twice (e.g. compare two courses) before answering."""
+    r1 = tool_use_response([tool_call("search_course_content", '{"query": "course A"}', "c1")])
+    r2 = tool_use_response([tool_call("search_course_content", '{"query": "course B"}', "c2")])
+    r3 = text_response("A and B both cover MCP, but differ on transport.")
+    create = MagicMock(side_effect=[r1, r2, r3])
+    gen = build_generator(create)
+    tm = make_tool_manager(fake_store)
+
+    out = gen.generate_response("Compare course A and course B.",
+                                tools=tm.get_tool_definitions(), tool_manager=tm)
+
+    assert out == "A and B both cover MCP, but differ on transport."
+    assert create.call_count == 3                       # search, search, synthesize
+    assert fake_store.calls[0]["query"] == "course A"
+    assert fake_store.calls[1]["query"] == "course B"
+
+
+def test_tool_loop_caps_rounds_and_forces_final(tool_use_response, tool_call, text_response, fake_store):
+    """If the model never stops searching, we cap rounds and force a final answer."""
+    def wants_tool():
+        return tool_use_response([tool_call("search_course_content", '{"query": "x"}')])
+    create = MagicMock(side_effect=[wants_tool(), wants_tool(), text_response("forced answer")])
+    gen = build_generator(create)
+    gen.max_tool_rounds = 2
+    tm = make_tool_manager(fake_store)
+
+    out = gen.generate_response("loop forever", tools=tm.get_tool_definitions(), tool_manager=tm)
+
+    assert out == "forced answer"
+    assert create.call_count == 3                       # 2 capped rounds + 1 forced synthesis
+    # The forced final call carries no tools.
+    assert "tools" not in create.call_args_list[2].kwargs
 
 
 def test_generic_api_error_propagates():

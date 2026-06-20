@@ -24,7 +24,10 @@ class RAGSystem:
             config.MAX_RESULTS,
             config.COURSE_NAME_MATCH_MAX_DISTANCE,
         )
-        self.ai_generator = AIGenerator(config.DEEPSEEK_API_KEY, config.DEEPSEEK_MODEL, config.DEEPSEEK_BASE_URL)
+        self.ai_generator = AIGenerator(
+            config.DEEPSEEK_API_KEY, config.DEEPSEEK_MODEL, config.DEEPSEEK_BASE_URL,
+            config.MAX_TOOL_ROUNDS,
+        )
         self.session_manager = SessionManager(config.MAX_HISTORY, config.MAX_SESSIONS)
         
         # Initialize search tools

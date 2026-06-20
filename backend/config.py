@@ -22,6 +22,7 @@ class Config:
     MAX_RESULTS: int = 5         # Maximum search results to return
     MAX_HISTORY: int = 2         # Number of conversation messages to remember
     MAX_SESSIONS: int = 1000     # Cap on retained in-memory sessions (LRU-evicted)
+    MAX_TOOL_ROUNDS: int = 5     # Max sequential tool-call rounds per query (multi-step search)
     # Max ChromaDB distance (default L2 squared) for a fuzzy course name to count
     # as a match in _resolve_course_name. Above this, the name is treated as "no
     # such course" instead of silently snapping to the nearest title. Tune to your
