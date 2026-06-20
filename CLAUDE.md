@@ -75,6 +75,16 @@ gitignored); passwords are bcrypt-hashed.
 - **Dependencies** (FastAPI): `get_current_user` (decode token → load user, else
   401) and `require_admin` (else 403). `/api/query` and `/api/courses` require
   login; `/api/courses/upload` and all `/api/admin/*` require admin.
+- **Token invalidation**: each JWT carries a `ver` (the user's `token_version`);
+  `get_current_user` rejects a token whose `ver` ≠ the stored value. Any password
+  change (self or admin reset) bumps `token_version`, so **all prior tokens for
+  that user die immediately** (tokens minted before this field existed default to
+  `ver=0` and stay valid until the next change). `change-password` therefore
+  returns a fresh token so the caller's own session survives.
+- **Login throttling**: `/api/auth/login` is rate-limited per client IP by an
+  in-memory `RateLimiter` (`rate_limit.py`) — only failed attempts count, a
+  success clears them; over `LOGIN_MAX_FAILURES`/`LOGIN_FAILURE_WINDOW_SECONDS`
+  returns 429. State is per-process (resets on restart; not shared across workers).
 - **Roles**: `user` (query/browse) and `admin` (+ upload + user management via
   `POST|GET|DELETE /api/admin/users` and `POST /api/admin/users/{id}/password`
   to reset a password). No public registration — the first admin is **seeded on
@@ -85,10 +95,13 @@ gitignored); passwords are bcrypt-hashed.
   / admin reset instead.
 - **Frontend gating** (`#addCourseSection` shown only for admins) is UX only —
   the server is the real gate.
-- **Config/env** (`config.py`): `JWT_SECRET` (required; warns if empty),
-  `JWT_EXPIRE_MINUTES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `USERS_DB_PATH`,
-  `CORS_ORIGINS` (restrict in production). **Deploy behind HTTPS** — Bearer
-  tokens/passwords must not traverse plain HTTP.
+- **Config/env** (`config.py`): `JWT_SECRET` (**required — startup aborts if
+  empty**, since an empty secret lets anyone forge tokens), `JWT_EXPIRE_MINUTES`,
+  `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `USERS_DB_PATH`, `CORS_ORIGINS` (restrict in
+  production), `LOGIN_MAX_FAILURES`/`LOGIN_FAILURE_WINDOW_SECONDS` (login
+  throttle), `MAX_UPLOAD_SIZE` (upload cap, 413 over it),
+  `COURSE_NAME_MATCH_MAX_DISTANCE` (fuzzy course-name match cutoff). **Deploy
+  behind HTTPS** — Bearer tokens/passwords must not traverse plain HTTP.
 
 ## Conventions & gotchas
 

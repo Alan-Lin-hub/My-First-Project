@@ -34,8 +34,13 @@ class SearchResults:
 class VectorStore:
     """Vector storage using ChromaDB for course content and metadata"""
     
-    def __init__(self, chroma_path: str, embedding_model: str, max_results: int = 5):
+    def __init__(self, chroma_path: str, embedding_model: str, max_results: int = 5,
+                 course_match_max_distance: float = float("inf")):
         self.max_results = max_results
+        # Above this ChromaDB distance, a fuzzy course name is treated as "no
+        # match" rather than snapping to the nearest title. Defaults to +inf so
+        # existing callers keep the old always-pick-nearest behavior.
+        self.course_match_max_distance = course_match_max_distance
         # Initialize ChromaDB client
         self.client = chromadb.PersistentClient(
             path=chroma_path,
@@ -100,19 +105,34 @@ class VectorStore:
             return SearchResults.empty(f"Search error: {str(e)}")
     
     def _resolve_course_name(self, course_name: str) -> Optional[str]:
-        """Use vector search to find best matching course by name"""
+        """Use vector search to find best matching course by name.
+
+        Guards against false matches: ChromaDB always returns its nearest title,
+        so without a distance cutoff an unrelated name (e.g. "cooking pasta")
+        would silently resolve to some course and wrongly filter the content
+        search. We reject matches whose distance exceeds
+        self.course_match_max_distance (see config.COURSE_NAME_MATCH_MAX_DISTANCE
+        for how that value was calibrated).
+        """
         try:
             results = self.course_catalog.query(
                 query_texts=[course_name],
                 n_results=1
             )
-            
+
             if results['documents'][0] and results['metadatas'][0]:
+                distance = results['distances'][0][0]
+                if distance > self.course_match_max_distance:
+                    print(
+                        f"Course name {course_name!r} rejected: distance "
+                        f"{distance:.3f} > {self.course_match_max_distance}"
+                    )
+                    return None
                 # Return the title (which is now the ID)
                 return results['metadatas'][0][0]['title']
         except Exception as e:
             print(f"Error resolving course name: {e}")
-        
+
         return None
     
     def _build_filter(self, course_title: Optional[str], lesson_number: Optional[int]) -> Optional[Dict]:

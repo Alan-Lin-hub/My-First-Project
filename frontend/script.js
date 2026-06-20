@@ -154,6 +154,10 @@ async function changePassword() {
             const data = await response.json().catch(() => ({}));
             throw new Error(data.detail || '修改失败');
         }
+        // The old token is now invalidated server-side; store the fresh one
+        // returned here so this session keeps working without re-login.
+        const data = await response.json().catch(() => ({}));
+        if (data.access_token) setToken(data.access_token);
         status.textContent = '密码修改成功'; status.className = 'upload-status success';
         document.getElementById('oldPassword').value = '';
         document.getElementById('newPassword').value = '';

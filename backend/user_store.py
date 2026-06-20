@@ -47,10 +47,20 @@ class UserStore:
                     username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'user',
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    token_version INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            # Migrate pre-existing databases that lack the token_version column.
+            # token_version is embedded in each JWT; bumping it invalidates all
+            # tokens issued before a password change (see auth.get_current_user).
+            try:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     # ---- queries -------------------------------------------------------- #
     def get_by_username(self, username: str) -> Optional[Dict[str, Any]]:
@@ -94,7 +104,8 @@ class UserStore:
         except sqlite3.IntegrityError:
             raise ValueError(f"username '{username}' already exists")
 
-        return {"id": user_id, "username": username, "role": role, "created_at": created_at}
+        return {"id": user_id, "username": username, "role": role,
+                "created_at": created_at, "token_version": 0}
 
     def delete_user(self, user_id: int) -> bool:
         with self._connect() as conn:
@@ -104,9 +115,12 @@ class UserStore:
     def update_password(self, user_id: int, new_password: str) -> bool:
         if not new_password:
             raise ValueError("password is required")
+        # Bump token_version alongside the hash so every JWT issued under the old
+        # password stops validating immediately (here and on any other device).
         with self._connect() as conn:
             cur = conn.execute(
-                "UPDATE users SET password_hash = ? WHERE id = ?",
+                "UPDATE users SET password_hash = ?, token_version = token_version + 1 "
+                "WHERE id = ?",
                 (hash_password(new_password), user_id),
             )
             return cur.rowcount > 0
