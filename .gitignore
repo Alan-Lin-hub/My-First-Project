@@ -33,3 +33,6 @@ uploads/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local-only reference docs (not part of the course corpus)
+/docs/E3+企业中台精华标准版解决方案.pdf
