@@ -8,7 +8,11 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
+import logging
 import openai
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 # Where uploaded course documents are stored (also auto-loaded on startup)
 DOCS_PATH = "../docs"
@@ -20,9 +24,50 @@ from user_store import UserStore
 from rate_limit import RateLimiter
 import auth
 from auth import get_current_user, require_admin, create_access_token
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: validate config, seed the admin, load docs. (No shutdown work.)
+
+    Replaces the deprecated @app.on_event("startup"). References the module-level
+    singletons (user_store, rag_system) initialized just below — they exist by
+    the time this runs at ASGI startup.
+    """
+    if not config.DEEPSEEK_API_KEY:
+        logger.warning("DEEPSEEK_API_KEY is not set — queries will fail until you add it to .env (see .env.example).")
+
+    if not config.JWT_SECRET:
+        # Fail fast: an empty secret means every JWT is signed with "" and can be
+        # forged by anyone to impersonate any user/admin. Refuse to start.
+        raise RuntimeError(
+            "JWT_SECRET is not set. Generate a strong random secret (e.g. "
+            "`python -c \"import secrets; print(secrets.token_urlsafe(32))\"`) "
+            "and set it in .env before starting the server."
+        )
+
+    # Seed the initial admin account if none exists yet
+    if config.ADMIN_PASSWORD:
+        if user_store.seed_admin(config.ADMIN_USERNAME, config.ADMIN_PASSWORD):
+            logger.info(f"Seeded initial admin account: {config.ADMIN_USERNAME}")
+    elif user_store.count_admins() == 0:
+        logger.warning("no admin exists and ADMIN_PASSWORD is not set — set ADMIN_USERNAME/ADMIN_PASSWORD in .env to create the first admin.")
+
+    docs_path = "../docs"
+    if os.path.exists(docs_path):
+        logger.info("Loading initial documents...")
+        try:
+            courses, chunks = rag_system.add_course_folder(docs_path, clear_existing=False)
+            logger.info(f"Loaded {courses} courses with {chunks} chunks")
+        except Exception as e:
+            logger.error(f"Error loading documents: {e}")
+
+    yield
+
 
 # Initialize FastAPI app
-app = FastAPI(title="Course Materials RAG System", root_path="")
+app = FastAPI(title="Course Materials RAG System", root_path="", lifespan=lifespan)
 
 # Add trusted host middleware for proxy
 app.add_middleware(
@@ -243,8 +288,10 @@ def query_documents(request: QueryRequest, current=Depends(get_current_user)):
             status_code=502,
             detail="DeepSeek rejected the API key (authentication failed). Check DEEPSEEK_API_KEY in your .env file."
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # Log the real cause server-side; don't leak internals to the client.
+        logger.exception("Query failed")
+        raise HTTPException(status_code=500, detail="Internal error while processing the query.")
 
 @app.get("/api/courses", response_model=CourseStats)
 async def get_course_stats(current=Depends(get_current_user)):
@@ -255,8 +302,9 @@ async def get_course_stats(current=Depends(get_current_user)):
             total_courses=analytics["total_courses"],
             course_titles=analytics["course_titles"]
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Failed to get course analytics")
+        raise HTTPException(status_code=500, detail="Internal error while loading course statistics.")
 
 @app.post("/api/courses/upload", response_model=CourseUploadResponse)
 async def upload_course(file: UploadFile = File(...), admin=Depends(require_admin)):
@@ -309,37 +357,6 @@ async def upload_course(file: UploadFile = File(...), admin=Depends(require_admi
         raise HTTPException(status_code=400, detail=f"Failed to ingest document: {e}")
 
     return CourseUploadResponse(filename=filename, **summary)
-
-@app.on_event("startup")
-async def startup_event():
-    """Seed the initial admin and load initial documents on startup"""
-    if not config.DEEPSEEK_API_KEY:
-        print("WARNING: DEEPSEEK_API_KEY is not set — queries will fail until you add it to .env (see .env.example).")
-
-    if not config.JWT_SECRET:
-        # Fail fast: an empty secret means every JWT is signed with "" and can be
-        # forged by anyone to impersonate any user/admin. Refuse to start.
-        raise RuntimeError(
-            "JWT_SECRET is not set. Generate a strong random secret (e.g. "
-            "`python -c \"import secrets; print(secrets.token_urlsafe(32))\"`) "
-            "and set it in .env before starting the server."
-        )
-
-    # Seed the initial admin account if none exists yet
-    if config.ADMIN_PASSWORD:
-        if user_store.seed_admin(config.ADMIN_USERNAME, config.ADMIN_PASSWORD):
-            print(f"Seeded initial admin account: {config.ADMIN_USERNAME}")
-    elif user_store.count_admins() == 0:
-        print("WARNING: no admin exists and ADMIN_PASSWORD is not set — set ADMIN_USERNAME/ADMIN_PASSWORD in .env to create the first admin.")
-
-    docs_path = "../docs"
-    if os.path.exists(docs_path):
-        print("Loading initial documents...")
-        try:
-            courses, chunks = rag_system.add_course_folder(docs_path, clear_existing=False)
-            print(f"Loaded {courses} courses with {chunks} chunks")
-        except Exception as e:
-            print(f"Error loading documents: {e}")
 
 # Custom static file handler with no-cache headers for development
 from fastapi.staticfiles import StaticFiles

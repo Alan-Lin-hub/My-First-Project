@@ -6,6 +6,9 @@ from ai_generator import AIGenerator
 from session_manager import SessionManager
 from search_tools import ToolManager, CourseSearchTool
 from models import Course, Lesson, CourseChunk
+import logging
+
+logger = logging.getLogger(__name__)
 
 class RAGSystem:
     """Main orchestrator for the Retrieval-Augmented Generation system"""
@@ -22,7 +25,7 @@ class RAGSystem:
             config.COURSE_NAME_MATCH_MAX_DISTANCE,
         )
         self.ai_generator = AIGenerator(config.DEEPSEEK_API_KEY, config.DEEPSEEK_MODEL, config.DEEPSEEK_BASE_URL)
-        self.session_manager = SessionManager(config.MAX_HISTORY)
+        self.session_manager = SessionManager(config.MAX_HISTORY, config.MAX_SESSIONS)
         
         # Initialize search tools
         self.tool_manager = ToolManager()
@@ -51,7 +54,7 @@ class RAGSystem:
             
             return course, len(course_chunks)
         except Exception as e:
-            print(f"Error processing course document {file_path}: {e}")
+            logger.error(f"Error processing course document {file_path}: {e}")
             return None, 0
     
     def add_or_update_course_document(self, file_path: str) -> Dict:
@@ -97,11 +100,11 @@ class RAGSystem:
         
         # Clear existing data if requested
         if clear_existing:
-            print("Clearing existing data for fresh rebuild...")
+            logger.info("Clearing existing data for fresh rebuild...")
             self.vector_store.clear_all_data()
         
         if not os.path.exists(folder_path):
-            print(f"Folder {folder_path} does not exist")
+            logger.warning(f"Folder {folder_path} does not exist")
             return 0, 0
         
         # Get existing course titles to avoid re-processing
@@ -122,12 +125,12 @@ class RAGSystem:
                         self.vector_store.add_course_content(course_chunks)
                         total_courses += 1
                         total_chunks += len(course_chunks)
-                        print(f"Added new course: {course.title} ({len(course_chunks)} chunks)")
+                        logger.info(f"Added new course: {course.title} ({len(course_chunks)} chunks)")
                         existing_course_titles.add(course.title)
                     elif course:
-                        print(f"Course already exists: {course.title} - skipping")
+                        logger.info(f"Course already exists: {course.title} - skipping")
                 except Exception as e:
-                    print(f"Error processing {file_name}: {e}")
+                    logger.error(f"Error processing {file_name}: {e}")
         
         return total_courses, total_chunks
     

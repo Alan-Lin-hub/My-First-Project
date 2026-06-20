@@ -1,9 +1,13 @@
+import json
+import logging
 import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from models import Course, CourseChunk
 from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class SearchResults:
@@ -123,15 +127,15 @@ class VectorStore:
             if results['documents'][0] and results['metadatas'][0]:
                 distance = results['distances'][0][0]
                 if distance > self.course_match_max_distance:
-                    print(
-                        f"Course name {course_name!r} rejected: distance "
-                        f"{distance:.3f} > {self.course_match_max_distance}"
+                    logger.debug(
+                        "Course name %r rejected: distance %.3f > %s",
+                        course_name, distance, self.course_match_max_distance,
                     )
                     return None
                 # Return the title (which is now the ID)
                 return results['metadatas'][0][0]['title']
         except Exception as e:
-            print(f"Error resolving course name: {e}")
+            logger.error(f"Error resolving course name: {e}")
 
         return None
     
@@ -154,8 +158,6 @@ class VectorStore:
     
     def add_course_metadata(self, course: Course):
         """Add course information to the catalog for semantic search"""
-        import json
-
         course_text = course.title
         
         # Build lessons metadata and serialize as JSON string
@@ -218,7 +220,7 @@ class VectorStore:
             self.course_catalog.delete(ids=[course_title])
             self.course_content.delete(where={"course_title": course_title})
         except Exception as e:
-            print(f"Error deleting course '{course_title}': {e}")
+            logger.error(f"Error deleting course '{course_title}': {e}")
 
     def clear_all_data(self):
         """Clear all data from both collections"""
@@ -229,7 +231,7 @@ class VectorStore:
             self.course_catalog = self._create_collection("course_catalog")
             self.course_content = self._create_collection("course_content")
         except Exception as e:
-            print(f"Error clearing data: {e}")
+            logger.error(f"Error clearing data: {e}")
     
     def get_existing_course_titles(self) -> List[str]:
         """Get all existing course titles from the vector store"""
@@ -240,7 +242,7 @@ class VectorStore:
                 return results['ids']
             return []
         except Exception as e:
-            print(f"Error getting existing course titles: {e}")
+            logger.error(f"Error getting existing course titles: {e}")
             return []
     
     def get_course_count(self) -> int:
@@ -251,12 +253,11 @@ class VectorStore:
                 return len(results['ids'])
             return 0
         except Exception as e:
-            print(f"Error getting course count: {e}")
+            logger.error(f"Error getting course count: {e}")
             return 0
     
     def get_all_courses_metadata(self) -> List[Dict[str, Any]]:
         """Get metadata for all courses in the vector store"""
-        import json
         try:
             results = self.course_catalog.get()
             if results and 'metadatas' in results:
@@ -271,7 +272,7 @@ class VectorStore:
                 return parsed_metadata
             return []
         except Exception as e:
-            print(f"Error getting courses metadata: {e}")
+            logger.error(f"Error getting courses metadata: {e}")
             return []
 
     def get_course_link(self, course_title: str) -> Optional[str]:
@@ -284,12 +285,11 @@ class VectorStore:
                 return metadata.get('course_link')
             return None
         except Exception as e:
-            print(f"Error getting course link: {e}")
+            logger.error(f"Error getting course link: {e}")
             return None
     
     def get_lesson_link(self, course_title: str, lesson_number: int) -> Optional[str]:
         """Get lesson link for a given course title and lesson number"""
-        import json
         try:
             # Get course by ID (title is the ID)
             results = self.course_catalog.get(ids=[course_title])
@@ -304,5 +304,5 @@ class VectorStore:
                             return lesson.get('lesson_link')
             return None
         except Exception as e:
-            print(f"Error getting lesson link: {e}")
+            logger.error(f"Error getting lesson link: {e}")
     
