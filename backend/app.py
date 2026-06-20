@@ -1,14 +1,19 @@
 import warnings
 warnings.filterwarnings("ignore", message="resource_tracker: There appear to be.*")
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
 import os
+import logging
 import openai
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 # Where uploaded course documents are stored (also auto-loaded on startup)
 DOCS_PATH = "../docs"
@@ -17,11 +22,53 @@ ALLOWED_UPLOAD_EXTENSIONS = (".txt", ".pdf", ".docx")
 from config import config
 from rag_system import RAGSystem
 from user_store import UserStore
+from rate_limit import RateLimiter
 import auth
 from auth import get_current_user, require_admin, create_access_token
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: validate config, seed the admin, load docs. (No shutdown work.)
+
+    Replaces the deprecated @app.on_event("startup"). References the module-level
+    singletons (user_store, rag_system) initialized just below — they exist by
+    the time this runs at ASGI startup.
+    """
+    if not config.DEEPSEEK_API_KEY:
+        logger.warning("DEEPSEEK_API_KEY is not set — queries will fail until you add it to .env (see .env.example).")
+
+    if not config.JWT_SECRET:
+        # Fail fast: an empty secret means every JWT is signed with "" and can be
+        # forged by anyone to impersonate any user/admin. Refuse to start.
+        raise RuntimeError(
+            "JWT_SECRET is not set. Generate a strong random secret (e.g. "
+            "`python -c \"import secrets; print(secrets.token_urlsafe(32))\"`) "
+            "and set it in .env before starting the server."
+        )
+
+    # Seed the initial admin account if none exists yet
+    if config.ADMIN_PASSWORD:
+        if user_store.seed_admin(config.ADMIN_USERNAME, config.ADMIN_PASSWORD):
+            logger.info(f"Seeded initial admin account: {config.ADMIN_USERNAME}")
+    elif user_store.count_admins() == 0:
+        logger.warning("no admin exists and ADMIN_PASSWORD is not set — set ADMIN_USERNAME/ADMIN_PASSWORD in .env to create the first admin.")
+
+    docs_path = "../docs"
+    if os.path.exists(docs_path):
+        logger.info("Loading initial documents...")
+        try:
+            courses, chunks = rag_system.add_course_folder(docs_path, clear_existing=False)
+            logger.info(f"Loaded {courses} courses with {chunks} chunks")
+        except Exception as e:
+            logger.error(f"Error loading documents: {e}")
+
+    yield
+
 
 # Initialize FastAPI app
-app = FastAPI(title="Course Materials RAG System", root_path="")
+app = FastAPI(title="Course Materials RAG System", root_path="", lifespan=lifespan)
 
 # Add trusted host middleware for proxy
 app.add_middleware(
@@ -47,16 +94,26 @@ rag_system = RAGSystem(config)
 user_store = UserStore(config.USERS_DB_PATH)
 auth.set_user_store(user_store)
 
+# Per-client failed-login limiter (brute-force protection)
+login_rate_limiter = RateLimiter(
+    config.LOGIN_MAX_FAILURES, config.LOGIN_FAILURE_WINDOW_SECONDS
+)
+
 # Pydantic models for request/response
 class QueryRequest(BaseModel):
     """Request model for course queries"""
     query: str
     session_id: Optional[str] = None
 
+class SourceItem(BaseModel):
+    """A citation for the UI: display text plus an optional clickable link."""
+    text: str
+    link: Optional[str] = None
+
 class QueryResponse(BaseModel):
     """Response model for course queries"""
     answer: str
-    sources: List[str]
+    sources: List[SourceItem]
     session_id: str
 
 class CourseStats(BaseModel):
@@ -119,12 +176,31 @@ def _validate_password(password: str):
 
 # ---- Auth -------------------------------------------------------------- #
 @app.post("/api/auth/login", response_model=TokenResponse)
-async def login(request: LoginRequest):
-    """Authenticate with username/password and receive a JWT."""
+async def login(request: LoginRequest, http_request: Request):
+    """Authenticate with username/password and receive a JWT.
+
+    Rate-limited per client IP to slow brute-force attacks: only failed attempts
+    are counted, and a success clears the counter. Behind a reverse proxy,
+    `client.host` is the proxy's IP — configure the proxy to set a trusted
+    forwarded-for header and read it here if you need per-real-client limiting.
+    """
+    client_key = http_request.client.host if http_request.client else "unknown"
+    if login_rate_limiter.is_blocked(client_key):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Please wait and try again.",
+            headers={"Retry-After": str(config.LOGIN_FAILURE_WINDOW_SECONDS)},
+        )
+
     user = user_store.verify_login(request.username, request.password)
     if not user:
+        login_rate_limiter.record(client_key)
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = create_access_token(username=user["username"], role=user["role"])
+
+    login_rate_limiter.reset(client_key)
+    token = create_access_token(
+        username=user["username"], role=user["role"], token_version=user["token_version"]
+    )
     return TokenResponse(access_token=token, username=user["username"], role=user["role"])
 
 @app.get("/api/auth/me", response_model=UserOut)
@@ -132,14 +208,23 @@ async def whoami(current=Depends(get_current_user)):
     """Return the currently authenticated user (drives frontend role gating)."""
     return UserOut(id=current["id"], username=current["username"], role=current["role"])
 
-@app.post("/api/auth/change-password", status_code=204)
+@app.post("/api/auth/change-password", response_model=TokenResponse)
 async def change_password(request: ChangePasswordRequest, current=Depends(get_current_user)):
-    """Change the current user's own password (requires the old password)."""
+    """Change the current user's own password (requires the old password).
+
+    Bumping the password invalidates every existing token (including the one used
+    for this request), so we mint and return a fresh token to keep the caller's
+    own session alive while logging out their other devices.
+    """
     if not user_store.verify_login(current["username"], request.old_password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     _validate_password(request.new_password)
     user_store.update_password(current["id"], request.new_password)
-    return None
+    user = user_store.get_by_username(current["username"])
+    token = create_access_token(
+        username=user["username"], role=user["role"], token_version=user["token_version"]
+    )
+    return TokenResponse(access_token=token, username=user["username"], role=user["role"])
 
 # ---- Admin: user management -------------------------------------------- #
 @app.get("/api/admin/users", response_model=List[UserOut])
@@ -176,8 +261,14 @@ async def reset_user_password(user_id: int, request: ResetPasswordRequest, admin
     return None
 
 @app.post("/api/query", response_model=QueryResponse)
-async def query_documents(request: QueryRequest, current=Depends(get_current_user)):
-    """Process a query and return response with sources"""
+def query_documents(request: QueryRequest, current=Depends(get_current_user)):
+    """Process a query and return response with sources.
+
+    Declared as a plain `def` (not `async def`) on purpose: rag_system.query is
+    synchronous and blocks on two DeepSeek HTTP calls plus a ChromaDB search.
+    FastAPI runs sync path operations in a worker thread, so requests no longer
+    block the event loop and serialize behind each other.
+    """
     # Fail fast with a clear message if the API key is not configured
     if not config.DEEPSEEK_API_KEY:
         raise HTTPException(
@@ -203,8 +294,10 @@ async def query_documents(request: QueryRequest, current=Depends(get_current_use
             status_code=502,
             detail="DeepSeek rejected the API key (authentication failed). Check DEEPSEEK_API_KEY in your .env file."
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        # Log the real cause server-side; don't leak internals to the client.
+        logger.exception("Query failed")
+        raise HTTPException(status_code=500, detail="Internal error while processing the query.")
 
 @app.get("/api/courses", response_model=CourseStats)
 async def get_course_stats(current=Depends(get_current_user)):
@@ -215,8 +308,9 @@ async def get_course_stats(current=Depends(get_current_user)):
             total_courses=analytics["total_courses"],
             course_titles=analytics["course_titles"]
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Failed to get course analytics")
+        raise HTTPException(status_code=500, detail="Internal error while loading course statistics.")
 
 @app.post("/api/courses/upload", response_model=CourseUploadResponse)
 async def upload_course(file: UploadFile = File(...), admin=Depends(require_admin)):
@@ -231,15 +325,35 @@ async def upload_course(file: UploadFile = File(...), admin=Depends(require_admi
             detail=f"Unsupported file type. Allowed: {', '.join(ALLOWED_UPLOAD_EXTENSIONS)}"
         )
 
-    # Persist the file into docs/ so it also survives restarts
+    # Persist the file into docs/ so it also survives restarts. Stream it in
+    # chunks and enforce MAX_UPLOAD_SIZE as we go, so an oversized upload can't
+    # be buffered fully into memory before we reject it.
     os.makedirs(DOCS_PATH, exist_ok=True)
     dest_path = os.path.join(DOCS_PATH, filename)
+    max_size = config.MAX_UPLOAD_SIZE
+    total = 0
+    oversize = False
     try:
-        contents = await file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
         with open(dest_path, "wb") as f:
-            f.write(contents)
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1 MB at a time
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_size:
+                    oversize = True
+                    break
+                f.write(chunk)
+
+        if oversize:
+            os.remove(dest_path)
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size is {max_size // (1024 * 1024)} MB.",
+            )
+        if total == 0:
+            os.remove(dest_path)
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
         # Process and ingest immediately (replaces an existing same-title course)
         summary = rag_system.add_or_update_course_document(dest_path)
@@ -250,38 +364,7 @@ async def upload_course(file: UploadFile = File(...), admin=Depends(require_admi
 
     return CourseUploadResponse(filename=filename, **summary)
 
-@app.on_event("startup")
-async def startup_event():
-    """Seed the initial admin and load initial documents on startup"""
-    if not config.DEEPSEEK_API_KEY:
-        print("WARNING: DEEPSEEK_API_KEY is not set — queries will fail until you add it to .env (see .env.example).")
-
-    if not config.JWT_SECRET:
-        print("WARNING: JWT_SECRET is not set — set a strong random secret in .env before deploying.")
-
-    # Seed the initial admin account if none exists yet
-    if config.ADMIN_PASSWORD:
-        if user_store.seed_admin(config.ADMIN_USERNAME, config.ADMIN_PASSWORD):
-            print(f"Seeded initial admin account: {config.ADMIN_USERNAME}")
-    elif user_store.count_admins() == 0:
-        print("WARNING: no admin exists and ADMIN_PASSWORD is not set — set ADMIN_USERNAME/ADMIN_PASSWORD in .env to create the first admin.")
-
-    docs_path = "../docs"
-    if os.path.exists(docs_path):
-        print("Loading initial documents...")
-        try:
-            courses, chunks = rag_system.add_course_folder(docs_path, clear_existing=False)
-            print(f"Loaded {courses} courses with {chunks} chunks")
-        except Exception as e:
-            print(f"Error loading documents: {e}")
-
 # Custom static file handler with no-cache headers for development
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-import os
-from pathlib import Path
-
-
 class DevStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)

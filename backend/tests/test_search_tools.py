@@ -25,8 +25,8 @@ def test_execute_tracks_sources(fake_store):
     tool.execute("MCP")
 
     assert tool.last_sources == [
-        "MCP: Build Rich-Context AI Apps - Lesson 1",
-        "MCP: Build Rich-Context AI Apps - Lesson 2",
+        {"text": "MCP: Build Rich-Context AI Apps - Lesson 1", "link": None},
+        {"text": "MCP: Build Rich-Context AI Apps - Lesson 2", "link": None},
     ]
 
 

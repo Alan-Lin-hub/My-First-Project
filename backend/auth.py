@@ -29,12 +29,17 @@ def set_user_store(store):
     _user_store = store
 
 
-def create_access_token(username: str, role: str) -> str:
-    """Create a signed JWT carrying the username (sub), role, and expiry."""
+def create_access_token(username: str, role: str, token_version: int = 0) -> str:
+    """Create a signed JWT carrying the username (sub), role, token_version, expiry.
+
+    `token_version` is checked against the user's current value on every request,
+    so bumping it (on password change) invalidates previously issued tokens.
+    """
     now = datetime.now(timezone.utc)
     payload = {
         "sub": username,
         "role": role,
+        "ver": token_version,
         "iat": now,
         "exp": now + timedelta(minutes=config.JWT_EXPIRE_MINUTES),
     }
@@ -68,6 +73,11 @@ def get_current_user(
 
     user = _user_store.get_by_username(username)
     if not user:
+        raise unauthorized
+
+    # Reject tokens issued before the user's last password change. `.get("ver", 0)`
+    # keeps tokens minted before this field existed valid until the next change.
+    if payload.get("ver", 0) != user.get("token_version", 0):
         raise unauthorized
 
     return {"id": user["id"], "username": user["username"], "role": user["role"]}

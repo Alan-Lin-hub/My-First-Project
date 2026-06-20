@@ -1,9 +1,12 @@
+import json
+import logging
 import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from models import Course, CourseChunk
-from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class SearchResults:
@@ -34,8 +37,13 @@ class SearchResults:
 class VectorStore:
     """Vector storage using ChromaDB for course content and metadata"""
     
-    def __init__(self, chroma_path: str, embedding_model: str, max_results: int = 5):
+    def __init__(self, chroma_path: str, embedding_model: str, max_results: int = 5,
+                 course_match_max_distance: float = float("inf")):
         self.max_results = max_results
+        # Above this ChromaDB distance, a fuzzy course name is treated as "no
+        # match" rather than snapping to the nearest title. Defaults to +inf so
+        # existing callers keep the old always-pick-nearest behavior.
+        self.course_match_max_distance = course_match_max_distance
         # Initialize ChromaDB client
         self.client = chromadb.PersistentClient(
             path=chroma_path,
@@ -100,19 +108,34 @@ class VectorStore:
             return SearchResults.empty(f"Search error: {str(e)}")
     
     def _resolve_course_name(self, course_name: str) -> Optional[str]:
-        """Use vector search to find best matching course by name"""
+        """Use vector search to find best matching course by name.
+
+        Guards against false matches: ChromaDB always returns its nearest title,
+        so without a distance cutoff an unrelated name (e.g. "cooking pasta")
+        would silently resolve to some course and wrongly filter the content
+        search. We reject matches whose distance exceeds
+        self.course_match_max_distance (see config.COURSE_NAME_MATCH_MAX_DISTANCE
+        for how that value was calibrated).
+        """
         try:
             results = self.course_catalog.query(
                 query_texts=[course_name],
                 n_results=1
             )
-            
+
             if results['documents'][0] and results['metadatas'][0]:
+                distance = results['distances'][0][0]
+                if distance > self.course_match_max_distance:
+                    logger.debug(
+                        "Course name %r rejected: distance %.3f > %s",
+                        course_name, distance, self.course_match_max_distance,
+                    )
+                    return None
                 # Return the title (which is now the ID)
                 return results['metadatas'][0][0]['title']
         except Exception as e:
-            print(f"Error resolving course name: {e}")
-        
+            logger.error(f"Error resolving course name: {e}")
+
         return None
     
     def _build_filter(self, course_title: Optional[str], lesson_number: Optional[int]) -> Optional[Dict]:
@@ -134,8 +157,6 @@ class VectorStore:
     
     def add_course_metadata(self, course: Course):
         """Add course information to the catalog for semantic search"""
-        import json
-
         course_text = course.title
         
         # Build lessons metadata and serialize as JSON string
@@ -198,7 +219,7 @@ class VectorStore:
             self.course_catalog.delete(ids=[course_title])
             self.course_content.delete(where={"course_title": course_title})
         except Exception as e:
-            print(f"Error deleting course '{course_title}': {e}")
+            logger.error(f"Error deleting course '{course_title}': {e}")
 
     def clear_all_data(self):
         """Clear all data from both collections"""
@@ -209,7 +230,7 @@ class VectorStore:
             self.course_catalog = self._create_collection("course_catalog")
             self.course_content = self._create_collection("course_content")
         except Exception as e:
-            print(f"Error clearing data: {e}")
+            logger.error(f"Error clearing data: {e}")
     
     def get_existing_course_titles(self) -> List[str]:
         """Get all existing course titles from the vector store"""
@@ -220,7 +241,7 @@ class VectorStore:
                 return results['ids']
             return []
         except Exception as e:
-            print(f"Error getting existing course titles: {e}")
+            logger.error(f"Error getting existing course titles: {e}")
             return []
     
     def get_course_count(self) -> int:
@@ -231,12 +252,11 @@ class VectorStore:
                 return len(results['ids'])
             return 0
         except Exception as e:
-            print(f"Error getting course count: {e}")
+            logger.error(f"Error getting course count: {e}")
             return 0
     
     def get_all_courses_metadata(self) -> List[Dict[str, Any]]:
         """Get metadata for all courses in the vector store"""
-        import json
         try:
             results = self.course_catalog.get()
             if results and 'metadatas' in results:
@@ -251,7 +271,7 @@ class VectorStore:
                 return parsed_metadata
             return []
         except Exception as e:
-            print(f"Error getting courses metadata: {e}")
+            logger.error(f"Error getting courses metadata: {e}")
             return []
 
     def get_course_link(self, course_title: str) -> Optional[str]:
@@ -264,12 +284,11 @@ class VectorStore:
                 return metadata.get('course_link')
             return None
         except Exception as e:
-            print(f"Error getting course link: {e}")
+            logger.error(f"Error getting course link: {e}")
             return None
     
     def get_lesson_link(self, course_title: str, lesson_number: int) -> Optional[str]:
         """Get lesson link for a given course title and lesson number"""
-        import json
         try:
             # Get course by ID (title is the ID)
             results = self.course_catalog.get(ids=[course_title])
@@ -284,5 +303,5 @@ class VectorStore:
                             return lesson.get('lesson_link')
             return None
         except Exception as e:
-            print(f"Error getting lesson link: {e}")
+            logger.error(f"Error getting lesson link: {e}")
     

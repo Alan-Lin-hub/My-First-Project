@@ -200,7 +200,8 @@ def test_change_own_password(client):
         json={"old_password": "userpw", "new_password": "newpw123"},
         headers=_bearer("regular", "user"),
     )
-    assert r.status_code == 204
+    assert r.status_code == 200
+    assert r.json()["access_token"]          # a fresh token is returned
     # Old password rejected, new one accepted
     assert client.post("/api/auth/login", json={"username": "regular", "password": "userpw"}).status_code == 401
     assert client.post("/api/auth/login", json={"username": "regular", "password": "newpw123"}).status_code == 200
@@ -250,3 +251,92 @@ def test_non_admin_cannot_reset_password(client):
         headers=_bearer("regular", "user"),
     )
     assert r.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# Brute-force protection + upload size limit
+# --------------------------------------------------------------------------- #
+def test_login_rate_limited_after_failures(client):
+    import app as app_module
+
+    limiter = app_module.login_rate_limiter
+    try:
+        # Exhaust the failure budget — each is a normal 401.
+        for _ in range(config.LOGIN_MAX_FAILURES):
+            r = client.post("/api/auth/login", json={"username": "admin", "password": "bad"})
+            assert r.status_code == 401
+        # The next attempt is blocked, even with the CORRECT password.
+        r = client.post("/api/auth/login", json={"username": "admin", "password": "adminpw"})
+        assert r.status_code == 429
+        assert "Retry-After" in r.headers
+    finally:
+        # Don't leak limiter state into other tests sharing the module-level app.
+        limiter.reset("testclient")
+
+
+def test_successful_login_clears_rate_limit(client):
+    import app as app_module
+
+    limiter = app_module.login_rate_limiter
+    try:
+        for _ in range(config.LOGIN_MAX_FAILURES - 1):
+            client.post("/api/auth/login", json={"username": "admin", "password": "bad"})
+        # A success resets the counter, so we don't get locked out afterwards.
+        assert client.post(
+            "/api/auth/login", json={"username": "admin", "password": "adminpw"}
+        ).status_code == 200
+        assert client.post(
+            "/api/auth/login", json={"username": "admin", "password": "bad"}
+        ).status_code == 401   # back to a clean budget, not 429
+    finally:
+        limiter.reset("testclient")
+
+
+def test_old_token_invalid_after_own_password_change(client):
+    # Get a real token tied to the current token_version.
+    old_token = client.post(
+        "/api/auth/login", json={"username": "regular", "password": "userpw"}
+    ).json()["access_token"]
+    old_hdr = {"Authorization": f"Bearer {old_token}"}
+    assert client.get("/api/auth/me", headers=old_hdr).status_code == 200
+
+    # Change the password using that token — get a fresh one back.
+    r = client.post(
+        "/api/auth/change-password",
+        json={"old_password": "userpw", "new_password": "newpw123"},
+        headers=old_hdr,
+    )
+    assert r.status_code == 200
+    new_hdr = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    # Old token is now rejected; the freshly issued one still works.
+    assert client.get("/api/auth/me", headers=old_hdr).status_code == 401
+    assert client.get("/api/auth/me", headers=new_hdr).status_code == 200
+
+
+def test_admin_password_reset_invalidates_user_token(client):
+    user_token = client.post(
+        "/api/auth/login", json={"username": "regular", "password": "userpw"}
+    ).json()["access_token"]
+    user_hdr = {"Authorization": f"Bearer {user_token}"}
+    assert client.get("/api/auth/me", headers=user_hdr).status_code == 200
+
+    users = client.get("/api/admin/users", headers=_bearer("admin", "admin")).json()
+    uid = next(u["id"] for u in users if u["username"] == "regular")
+    r = client.post(
+        f"/api/admin/users/{uid}/password",
+        json={"new_password": "reset123"},
+        headers=_bearer("admin", "admin"),
+    )
+    assert r.status_code == 204
+
+    # The user's pre-reset token is now invalid.
+    assert client.get("/api/auth/me", headers=user_hdr).status_code == 401
+
+
+def test_upload_rejects_oversized_file(client, monkeypatch):
+    monkeypatch.setattr(config, "MAX_UPLOAD_SIZE", 10)  # 10 bytes
+    big = b"Course Title: X\n" + b"x" * 100
+    files = {"file": ("big.txt", big, "text/plain")}
+    r = client.post("/api/courses/upload", files=files, headers=_bearer("admin", "admin"))
+    assert r.status_code == 413

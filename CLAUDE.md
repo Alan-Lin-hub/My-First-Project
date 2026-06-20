@@ -21,11 +21,14 @@ cd backend && uv run uvicorn app:app --reload --port 8000
 uv run pytest
 # Include the integration tests (real DeepSeek API + ChromaDB):
 RUN_INTEGRATION=1 uv run pytest        # or set DEEPSEEK_API_KEY
+
+# Lint (ruff; config in pyproject.toml)
+uv run ruff check backend/
 ```
 
 - **Always use `uv` to run the server and manage dependencies — never invoke `pip` directly.**
 - Requires `DEEPSEEK_API_KEY` in a `.env` file at the repo root (copy from `.env.example`). The LLM is DeepSeek's OpenAI-compatible API (`config.DEEPSEEK_BASE_URL`, model `deepseek-chat`).
-- Tests live in `backend/tests/` (pytest). Unit tests mock the DeepSeek client and a fake vector store; tests marked `integration` are skipped unless `RUN_INTEGRATION=1` or `DEEPSEEK_API_KEY` is set. No linter or build step exists.
+- Tests live in `backend/tests/` (pytest). Unit tests mock the DeepSeek client and a fake vector store; tests marked `integration` are skipped unless `RUN_INTEGRATION=1` or `DEEPSEEK_API_KEY` is set. Lint with `ruff` (config in `pyproject.toml`; `E402` ignored — several modules run setup before imports). `.github/workflows/ci.yml` runs ruff + pytest on push/PR. No build step.
 - `main.py` at the root is an unused placeholder — the real entrypoint is `backend/app.py`.
 
 ## Architecture
@@ -42,9 +45,9 @@ RUN_INTEGRATION=1 uv run pytest        # or set DEEPSEEK_API_KEY
 1. `course_catalog` — course metadata (title, instructor, lessons as JSON). A fuzzy course name like "MCP" is first **semantically resolved** to a full course title here (`_resolve_course_name`).
 2. `course_content` — the actual text chunks. The resolved title + optional lesson number become a filter (`_build_filter`) for the content query.
 
-### Tool-based search is single-pass
+### Tool-based search is a bounded multi-round loop
 
-`AIGenerator` (`backend/ai_generator.py`) makes **exactly two sequential DeepSeek calls** when a tool is used (`_handle_tool_execution`): one to trigger the search, one to synthesize. There is **no tool-call loop** — the model can search at most once per query (also enforced by the system prompt). Multi-step retrieval (e.g. comparing two courses) is not currently possible; this is the main extension point.
+`AIGenerator` (`backend/ai_generator.py`) runs a **tool-call loop** in `generate_response`: each round calls DeepSeek with tools (`tool_choice="auto"`); if the model requests a search, `_execute_tool_calls` runs it and appends the results, then the loop calls again. The loop ends when the model returns plain text (no `tool_calls`), or after `config.MAX_TOOL_ROUNDS` rounds — in which case one final no-tools call forces a synthesized answer. This allows **multi-step retrieval** (e.g. comparing two courses); the system prompt tells the model it may search more than once but to stop as soon as it can answer. A query with no tools available is a single completion call.
 
 DeepSeek uses the **OpenAI-compatible** chat-completions API (the `openai` SDK pointed at `DEEPSEEK_BASE_URL`). The tools in `search_tools.py` still return **Anthropic-style** definitions (`input_schema`); `AIGenerator._to_openai_tools` converts them to OpenAI `function`/`parameters` format at call time, so `search_tools.py` stays API-agnostic. Tool-call arguments come back as a JSON string and are `json.loads`-ed before dispatch.
 
@@ -75,6 +78,16 @@ gitignored); passwords are bcrypt-hashed.
 - **Dependencies** (FastAPI): `get_current_user` (decode token → load user, else
   401) and `require_admin` (else 403). `/api/query` and `/api/courses` require
   login; `/api/courses/upload` and all `/api/admin/*` require admin.
+- **Token invalidation**: each JWT carries a `ver` (the user's `token_version`);
+  `get_current_user` rejects a token whose `ver` ≠ the stored value. Any password
+  change (self or admin reset) bumps `token_version`, so **all prior tokens for
+  that user die immediately** (tokens minted before this field existed default to
+  `ver=0` and stay valid until the next change). `change-password` therefore
+  returns a fresh token so the caller's own session survives.
+- **Login throttling**: `/api/auth/login` is rate-limited per client IP by an
+  in-memory `RateLimiter` (`rate_limit.py`) — only failed attempts count, a
+  success clears them; over `LOGIN_MAX_FAILURES`/`LOGIN_FAILURE_WINDOW_SECONDS`
+  returns 429. State is per-process (resets on restart; not shared across workers).
 - **Roles**: `user` (query/browse) and `admin` (+ upload + user management via
   `POST|GET|DELETE /api/admin/users` and `POST /api/admin/users/{id}/password`
   to reset a password). No public registration — the first admin is **seeded on
@@ -85,10 +98,13 @@ gitignored); passwords are bcrypt-hashed.
   / admin reset instead.
 - **Frontend gating** (`#addCourseSection` shown only for admins) is UX only —
   the server is the real gate.
-- **Config/env** (`config.py`): `JWT_SECRET` (required; warns if empty),
-  `JWT_EXPIRE_MINUTES`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `USERS_DB_PATH`,
-  `CORS_ORIGINS` (restrict in production). **Deploy behind HTTPS** — Bearer
-  tokens/passwords must not traverse plain HTTP.
+- **Config/env** (`config.py`): `JWT_SECRET` (**required — startup aborts if
+  empty**, since an empty secret lets anyone forge tokens), `JWT_EXPIRE_MINUTES`,
+  `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `USERS_DB_PATH`, `CORS_ORIGINS` (restrict in
+  production), `LOGIN_MAX_FAILURES`/`LOGIN_FAILURE_WINDOW_SECONDS` (login
+  throttle), `MAX_UPLOAD_SIZE` (upload cap, 413 over it),
+  `COURSE_NAME_MATCH_MAX_DISTANCE` (fuzzy course-name match cutoff). **Deploy
+  behind HTTPS** — Bearer tokens/passwords must not traverse plain HTTP.
 
 ## Conventions & gotchas
 

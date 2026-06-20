@@ -154,6 +154,10 @@ async function changePassword() {
             const data = await response.json().catch(() => ({}));
             throw new Error(data.detail || '修改失败');
         }
+        // The old token is now invalidated server-side; store the fresh one
+        // returned here so this session keeps working without re-login.
+        const data = await response.json().catch(() => ({}));
+        if (data.access_token) setToken(data.access_token);
         status.textContent = '密码修改成功'; status.className = 'upload-status success';
         document.getElementById('oldPassword').value = '';
         document.getElementById('newPassword').value = '';
@@ -417,10 +421,20 @@ function addMessage(content, type, sources = null, isWelcome = false) {
     let html = `<div class="message-content">${displayContent}</div>`;
     
     if (sources && sources.length > 0) {
+        // Each source is {text, link}; render a clickable link when present.
+        const rendered = sources.map(s => {
+            const item = (typeof s === 'string') ? { text: s, link: null } : s;
+            const text = escapeHtml(item.text || '');
+            if (item.link) {
+                const href = escapeHtml(item.link).replace(/"/g, '&quot;');
+                return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+            }
+            return text;
+        }).join(', ');
         html += `
             <details class="sources-collapsible">
                 <summary class="sources-header">Sources</summary>
-                <div class="sources-content">${sources.join(', ')}</div>
+                <div class="sources-content">${rendered}</div>
             </details>
         `;
     }

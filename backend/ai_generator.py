@@ -9,8 +9,8 @@ class AIGenerator:
     SYSTEM_PROMPT = """ You are an AI assistant specialized in course materials and educational content with access to a comprehensive search tool for course information.
 
 Search Tool Usage:
-- Use the search tool **only** for questions about specific course content or detailed educational materials
-- **One search per query maximum**
+- Use the search tool for questions about specific course content or detailed educational materials
+- You may search **more than once** when a question needs it — e.g. comparing two courses, or refining after a first result. Keep each search focused and stop searching as soon as you can answer.
 - Synthesize search results into accurate, fact-based responses
 - If search yields no results, state this clearly without offering alternatives
 
@@ -30,12 +30,15 @@ All responses must be:
 Provide only the direct answer to what was asked.
 """
 
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.deepseek.com"):
+    def __init__(self, api_key: str, model: str, base_url: str = "https://api.deepseek.com",
+                 max_tool_rounds: int = 5):
         # The OpenAI client raises if api_key is empty, which would crash server
         # startup. Use a placeholder so construction succeeds; the app-level guard
         # (and DeepSeek auth) reject actual calls made without a real key.
         self.client = OpenAI(api_key=api_key or "not-configured", base_url=base_url)
         self.model = model
+        # Upper bound on sequential tool-call rounds before we force a final answer.
+        self.max_tool_rounds = max_tool_rounds
 
         # Pre-build base API parameters
         self.base_params = {
@@ -96,50 +99,42 @@ Provide only the direct answer to what was asked.
             {"role": "user", "content": query},
         ]
 
-        # Prepare API call parameters
-        api_params = {
-            **self.base_params,
-            "messages": messages,
-        }
-
-        # Add tools if available
         openai_tools = self._to_openai_tools(tools)
-        if openai_tools:
-            api_params["tools"] = openai_tools
-            api_params["tool_choice"] = "auto"
 
-        # Get response from DeepSeek
-        response = self.client.chat.completions.create(**api_params)
-        message = response.choices[0].message
+        # No tools available: a single completion call.
+        if not (openai_tools and tool_manager):
+            response = self.client.chat.completions.create(
+                **self.base_params, messages=messages
+            )
+            return response.choices[0].message.content
 
-        # Handle tool execution if needed
-        if message.tool_calls and tool_manager:
-            return self._handle_tool_execution(message, api_params, tool_manager)
+        # Tool loop: let the model search and refine across multiple rounds
+        # (e.g. comparing two courses) until it answers or we hit the cap.
+        for _ in range(self.max_tool_rounds):
+            response = self.client.chat.completions.create(
+                **self.base_params,
+                messages=messages,
+                tools=openai_tools,
+                tool_choice="auto",
+            )
+            message = response.choices[0].message
+            if not message.tool_calls:
+                return message.content
+            # Record the assistant's tool-call message, then each tool's result.
+            messages.append(message)
+            self._execute_tool_calls(message, messages, tool_manager)
 
-        # Return direct response
-        return message.content
+        # Rounds exhausted while the model still wants to search: force a final
+        # answer with no tools so we always return synthesized text.
+        final_response = self.client.chat.completions.create(
+            **self.base_params, messages=messages
+        )
+        return final_response.choices[0].message.content
 
-    def _handle_tool_execution(self, initial_message, base_params: Dict[str, Any], tool_manager):
-        """
-        Handle execution of tool calls and get follow-up response.
-
-        Args:
-            initial_message: The assistant message containing tool_calls
-            base_params: Base API parameters (includes the original messages)
-            tool_manager: Manager to execute tools
-
-        Returns:
-            Final response text after tool execution
-        """
-        # Start with existing messages
-        messages = list(base_params["messages"])
-
-        # Add the assistant's tool-call message verbatim so tool results can reference it
-        messages.append(initial_message)
-
-        # Execute all tool calls and append their results
-        for tool_call in initial_message.tool_calls:
-            # OpenAI/DeepSeek pass arguments as a JSON string
+    def _execute_tool_calls(self, message, messages, tool_manager):
+        """Run every tool call on `message` and append each result to `messages`."""
+        for tool_call in message.tool_calls:
+            # OpenAI/DeepSeek pass arguments as a JSON string.
             try:
                 tool_args = json.loads(tool_call.function.arguments or "{}")
             except json.JSONDecodeError:
@@ -155,13 +150,3 @@ Provide only the direct answer to what was asked.
                 "tool_call_id": tool_call.id,
                 "content": tool_result,
             })
-
-        # Prepare final API call without tools (synthesis step)
-        final_params = {
-            **self.base_params,
-            "messages": messages,
-        }
-
-        # Get final response
-        final_response = self.client.chat.completions.create(**final_params)
-        return final_response.choices[0].message.content
