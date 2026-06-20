@@ -25,12 +25,14 @@ def rag(tmp_path):
 
 def test_query_forwards_tools_and_returns_answer(rag):
     rag.ai_generator.generate_response = MagicMock(return_value="An answer about MCP.")
-    rag.search_tool.last_sources = ["MCP: Build Rich-Context AI Apps - Lesson 1"]
+    rag.search_tool.last_sources = [
+        {"text": "MCP: Build Rich-Context AI Apps - Lesson 1", "link": None}
+    ]
 
     answer, sources = rag.query("What is MCP?")
 
     assert answer == "An answer about MCP."
-    assert sources == ["MCP: Build Rich-Context AI Apps - Lesson 1"]
+    assert sources == [{"text": "MCP: Build Rich-Context AI Apps - Lesson 1", "link": None}]
 
     kwargs = rag.ai_generator.generate_response.call_args.kwargs
     # The tool definitions and tool_manager are handed to the generator

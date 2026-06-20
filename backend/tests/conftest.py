@@ -49,6 +49,14 @@ class FakeVectorStore:
         })
         return self._results
 
+    # Link lookups used by CourseSearchTool to enrich sources. The fake corpus
+    # has no links, so these return None (real VectorStore returns real URLs).
+    def get_lesson_link(self, course_title, lesson_number):
+        return None
+
+    def get_course_link(self, course_title):
+        return None
+
 
 @pytest.fixture
 def fake_store():

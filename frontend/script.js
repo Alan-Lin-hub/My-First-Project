@@ -421,10 +421,20 @@ function addMessage(content, type, sources = null, isWelcome = false) {
     let html = `<div class="message-content">${displayContent}</div>`;
     
     if (sources && sources.length > 0) {
+        // Each source is {text, link}; render a clickable link when present.
+        const rendered = sources.map(s => {
+            const item = (typeof s === 'string') ? { text: s, link: null } : s;
+            const text = escapeHtml(item.text || '');
+            if (item.link) {
+                const href = escapeHtml(item.link).replace(/"/g, '&quot;');
+                return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+            }
+            return text;
+        }).join(', ');
         html += `
             <details class="sources-collapsible">
                 <summary class="sources-header">Sources</summary>
-                <div class="sources-content">${sources.join(', ')}</div>
+                <div class="sources-content">${rendered}</div>
             </details>
         `;
     }
