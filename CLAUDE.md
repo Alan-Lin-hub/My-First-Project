@@ -21,11 +21,14 @@ cd backend && uv run uvicorn app:app --reload --port 8000
 uv run pytest
 # Include the integration tests (real DeepSeek API + ChromaDB):
 RUN_INTEGRATION=1 uv run pytest        # or set DEEPSEEK_API_KEY
+
+# Lint (ruff; config in pyproject.toml)
+uv run ruff check backend/
 ```
 
 - **Always use `uv` to run the server and manage dependencies — never invoke `pip` directly.**
 - Requires `DEEPSEEK_API_KEY` in a `.env` file at the repo root (copy from `.env.example`). The LLM is DeepSeek's OpenAI-compatible API (`config.DEEPSEEK_BASE_URL`, model `deepseek-chat`).
-- Tests live in `backend/tests/` (pytest). Unit tests mock the DeepSeek client and a fake vector store; tests marked `integration` are skipped unless `RUN_INTEGRATION=1` or `DEEPSEEK_API_KEY` is set. No linter or build step exists.
+- Tests live in `backend/tests/` (pytest). Unit tests mock the DeepSeek client and a fake vector store; tests marked `integration` are skipped unless `RUN_INTEGRATION=1` or `DEEPSEEK_API_KEY` is set. Lint with `ruff` (config in `pyproject.toml`; `E402` ignored — several modules run setup before imports). `.github/workflows/ci.yml` runs ruff + pytest on push/PR. No build step.
 - `main.py` at the root is an unused placeholder — the real entrypoint is `backend/app.py`.
 
 ## Architecture

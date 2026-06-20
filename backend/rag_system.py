@@ -5,7 +5,7 @@ from vector_store import VectorStore
 from ai_generator import AIGenerator
 from session_manager import SessionManager
 from search_tools import ToolManager, CourseSearchTool
-from models import Course, Lesson, CourseChunk
+from models import Course
 import logging
 
 logger = logging.getLogger(__name__)
