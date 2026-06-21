@@ -301,7 +301,7 @@ function setupUploadListeners() {
         const file = fileInput.files[0];
         if (!file) return;
 
-        status.textContent = `Uploading "${file.name}"…`;
+        status.textContent = `正在上传 "${file.name}"…`;
         status.className = 'upload-status loading';
         uploadButton.disabled = true;
 
@@ -314,10 +314,10 @@ function setupUploadListeners() {
                 body: formData
             });
             const data = await response.json();
-            if (!response.ok) throw new Error(data.detail || 'Upload failed');
+            if (!response.ok) throw new Error(data.detail || '上传失败');
 
-            const verb = data.replaced ? 'Updated' : 'Added';
-            status.textContent = `${verb}: ${data.course_title} — ${data.lessons} lessons, ${data.chunks} chunks`;
+            const verb = data.replaced ? '已更新' : '已添加';
+            status.textContent = `${verb}：${data.course_title} — ${data.lessons} 节课程，${data.chunks} 个片段`;
             status.className = 'upload-status success';
 
             // Refresh the course list so the new/updated course shows up
@@ -364,7 +364,7 @@ async function sendMessage() {
 
         if (!response.ok) {
             // Surface the backend's error detail (e.g. missing API key) instead of a generic message
-            let detail = 'Query failed';
+            let detail = '查询失败';
             try {
                 const errData = await response.json();
                 if (errData && errData.detail) detail = errData.detail;
@@ -433,7 +433,7 @@ function addMessage(content, type, sources = null, isWelcome = false) {
         }).join(', ');
         html += `
             <details class="sources-collapsible">
-                <summary class="sources-header">Sources</summary>
+                <summary class="sources-header">来源</summary>
                 <div class="sources-content">${rendered}</div>
             </details>
         `;
@@ -458,7 +458,7 @@ function escapeHtml(text) {
 async function createNewSession() {
     currentSessionId = null;
     chatMessages.innerHTML = '';
-    addMessage('Welcome to the Course Materials Assistant! I can help you with questions about courses, lessons and specific content. What would you like to know?', 'assistant', null, true);
+    addMessage('欢迎来到课程资料助手！我可以帮您解答关于课程、课时和具体内容的问题。您想了解什么？', 'assistant', null, true);
 }
 
 // Load course statistics
@@ -466,7 +466,7 @@ async function loadCourseStats() {
     try {
         console.log('Loading course stats...');
         const response = await authFetch(`${API_URL}/courses`);
-        if (!response.ok) throw new Error('Failed to load course stats');
+        if (!response.ok) throw new Error('加载课程统计失败');
         
         const data = await response.json();
         console.log('Course data received:', data);
@@ -483,7 +483,7 @@ async function loadCourseStats() {
                     .map(title => `<div class="course-title-item">${title}</div>`)
                     .join('');
             } else {
-                courseTitles.innerHTML = '<span class="no-courses">No courses available</span>';
+                courseTitles.innerHTML = '<span class="no-courses">暂无课程</span>';
             }
         }
         
@@ -494,7 +494,7 @@ async function loadCourseStats() {
             totalCourses.textContent = '0';
         }
         if (courseTitles) {
-            courseTitles.innerHTML = '<span class="error">Failed to load courses</span>';
+            courseTitles.innerHTML = '<span class="error">加载课程失败</span>';
         }
     }
 }
