@@ -221,9 +221,12 @@ sudo systemctl restart course-rag
 
 ---
 
+## 已内置的安全能力(无需额外做)
+
+- **登录限流**防爆破:`/api/auth/login` 已由进程内 `RateLimiter`(`rate_limit.py`)按客户端 IP 限流——只有失败计数,成功即清零,超过 `LOGIN_MAX_FAILURES`/`LOGIN_FAILURE_WINDOW_SECONDS` 返回 429。注意是**进程内**状态(重启即清、多 worker 不共享)。
+- **改密即踢下线**:每个 JWT 携带用户的 `token_version`(`ver`);任何改密(自助或管理员重置)都会把它 +1,**旧 token 立即失效**。`change-password` 会返回新 token 让本人会话存活。
+
 ## 进一步加固(可选,后续)
 
-- **登录限流**防爆破:用 [`slowapi`](https://github.com/laurentS/slowapi) 给 `/api/auth/login` 加速率限制,或在 nginx 用 `limit_req`。
-- **令牌吊销 / 改密即踢下线**:当前改密后旧 JWT 到期前仍有效;需要的话引入 token 版本号或短期 token + 刷新 token。
 - **TrustedHost 收紧**:`app.py` 里 `allowed_hosts=["*"]` 可改成你的域名。
-- **多实例 / 高并发**:需把会话改为共享存储(Redis)、向量库改为可并发的部署,再上多 worker / 多机。
+- **多实例 / 高并发**:需把会话与登录限流改为共享存储(Redis)、向量库改为可并发的部署,再上多 worker / 多机。详见仓库根目录 [`SCALING.md`](SCALING.md)。
