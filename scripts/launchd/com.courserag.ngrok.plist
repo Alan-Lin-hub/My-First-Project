@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.courserag.ngrok</string>
+
+    <!-- 固定免费域名隧道，转发到本机 8000 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/linsen/.local/bin/ngrok</string>
+        <string>http</string>
+        <string>--domain=engraving-exile-fester.ngrok-free.dev</string>
+        <string>8000</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/linsen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/linsen/Library/Logs/courserag/ngrok.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/linsen/Library/Logs/courserag/ngrok.err.log</string>
+</dict>
+</plist>

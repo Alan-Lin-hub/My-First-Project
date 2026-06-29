@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.courserag.api</string>
+
+    <!-- 生产启动：无 --reload，单 worker，绑定 0.0.0.0 供 ngrok/局域网访问 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/linsen/.local/bin/uv</string>
+        <string>run</string>
+        <string>uvicorn</string>
+        <string>app:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8000</string>
+        <string>--workers</string>
+        <string>1</string>
+    </array>
+
+    <!-- 从 backend/ 启动，与 start-local.sh 一致（dotenv 会向上找仓库根的 .env） -->
+    <key>WorkingDirectory</key>
+    <string>/Users/linsen/开发工具/My-First-Project/backend</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/linsen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- 崩溃 / 被 kill 后自动拉起 -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/linsen/Library/Logs/courserag/api.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/linsen/Library/Logs/courserag/api.err.log</string>
+</dict>
+</plist>

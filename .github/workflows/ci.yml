@@ -25,3 +25,14 @@ jobs:
       # skipped automatically unless RUN_INTEGRATION / DEEPSEEK_API_KEY is set.
       - name: Test (pytest)
         run: uv run pytest -q
+
+  # CD: deploy to the local Mac via a self-hosted runner. Only runs on a push to
+  # main and only after `test` passes. No checkout — the deploy script operates
+  # on the real deploy directory in place (keeps chroma_db / users.db / .env).
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: [self-hosted, macOS]
+    steps:
+      - name: Deploy on local Mac
+        run: "/Users/linsen/开发工具/My-First-Project/scripts/deploy-mac.sh"
