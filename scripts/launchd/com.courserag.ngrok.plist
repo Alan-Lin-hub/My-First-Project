@@ -10,14 +10,28 @@
     <array>
         <string>/Users/linsen/.local/bin/ngrok</string>
         <string>http</string>
-        <string>--domain=engraving-exile-fester.ngrok-free.dev</string>
+        <string>--url=https://engraving-exile-fester.ngrok-free.dev</string>
         <string>8000</string>
     </array>
 
+    <!-- 清空代理变量：免费版 ngrok 不允许经 HTTP 代理（ERR_NGROK_9009）。
+         launchd 会继承系统级 proxy（如 ClashX 设的全局代理），这里强制置空。 -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>/Users/linsen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>http_proxy</key>
+        <string></string>
+        <key>https_proxy</key>
+        <string></string>
+        <key>HTTP_PROXY</key>
+        <string></string>
+        <key>HTTPS_PROXY</key>
+        <string></string>
+        <key>all_proxy</key>
+        <string></string>
+        <key>ALL_PROXY</key>
+        <string></string>
     </dict>
 
     <key>RunAtLoad</key>
