@@ -30,11 +30,11 @@
         <string>/Users/linsen/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
+    <!-- 手动启动，不再在开机/登录时自动拉起 -->
     <key>RunAtLoad</key>
-    <true/>
-    <!-- 崩溃 / 被 kill 后自动拉起 -->
+    <false/>
     <key>KeepAlive</key>
-    <true/>
+    <false/>
 
     <key>StandardOutPath</key>
     <string>/Users/linsen/Library/Logs/courserag/api.out.log</string>

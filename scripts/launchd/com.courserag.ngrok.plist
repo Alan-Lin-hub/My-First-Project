@@ -34,10 +34,11 @@
         <string></string>
     </dict>
 
+    <!-- 手动启动，不再在开机/登录时自动拉起 -->
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
     <key>KeepAlive</key>
-    <true/>
+    <false/>
 
     <key>StandardOutPath</key>
     <string>/Users/linsen/Library/Logs/courserag/ngrok.out.log</string>
