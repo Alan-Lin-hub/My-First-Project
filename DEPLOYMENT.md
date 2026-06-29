@@ -230,3 +230,77 @@ sudo systemctl restart course-rag
 
 - **TrustedHost 收紧**:`app.py` 里 `allowed_hosts=["*"]` 可改成你的域名。
 - **多实例 / 高并发**:需把会话与登录限流改为共享存储(Redis)、向量库改为可并发的部署,再上多 worker / 多机。详见仓库根目录 [`SCALING.md`](SCALING.md)。
+
+---
+
+# 附:本地 Mac 自托管 + GitHub Actions CI/CD(当前实际部署方式)
+
+上面 0–10 是 Ubuntu 服务器方案。**当前实际跑的是另一套**:部署目标是本机 Mac,用 ngrok 暴露公网,通过 GitHub Actions **self-hosted runner** 实现 push 即自动部署。两套独立,本节是现状的运维参考。
+
+## 架构与组成
+
+```
+push main → GitHub Actions
+   ├ test   (云端 ubuntu)          ruff + pytest
+   └ deploy (self-hosted, 本机Mac) scripts/deploy-mac.sh:git pull→uv sync→重启服务→健康检查
+uvicorn / ngrok 由 launchd 托管(常驻、崩溃自启、开机自启),与 runner 进程树解耦
+```
+
+- **runner**:装在 `~/actions-runner/`,以 LaunchAgent 形式常驻(`./svc.sh install`)。
+- **两个 launchd 服务**(plist 源文件在 `scripts/launchd/`,已拷到 `~/Library/LaunchAgents/`):
+  - `com.courserag.api` → uvicorn `app:app` 0.0.0.0:8000(无 `--reload`、单 worker)
+  - `com.courserag.ngrok` → `ngrok http --url=https://engraving-exile-fester.ngrok-free.dev 8000`
+- **workflow**:`.github/workflows/ci.yml` 的 `deploy` job(`if main push` + `needs: test`)。
+- 日志在 `~/Library/Logs/courserag/`。
+
+## 工作方式
+
+**改代码 → commit → `git push origin main`**,其余全自动(test 通过才 deploy;deploy 失败 Actions 标红,旧服务因 launchd 仍在跑)。
+> 该目录 checkout 在 `main`,开发=部署同一份。建议直接在 main 上改;要试验另开分支,上线时合回 main。
+
+## 日常运维命令
+
+```bash
+APP=/Users/linsen/开发工具/My-First-Project; U=$(id -u)
+
+# —— 看日志 ——
+tail -f ~/Library/Logs/courserag/api.err.log        # API 日志(启动/报错)
+tail -f ~/Library/Logs/courserag/ngrok.err.log      # 隧道日志
+
+# —— 手动重启(改了 .env / 需要重载时) ——
+launchctl kickstart -k "gui/$U/com.courserag.api"
+launchctl kickstart -k "gui/$U/com.courserag.ngrok"
+
+# —— 查状态 / 健康 ——
+launchctl print "gui/$U/com.courserag.api"   | grep "state ="
+curl -fsS http://127.0.0.1:8000/ >/dev/null && echo OK     # 本地
+curl -s http://127.0.0.1:4040/api/tunnels | grep -o '"public_url":"[^"]*"'  # 公网隧道URL
+
+# —— 停 / 启某个服务 ——
+launchctl unload ~/Library/LaunchAgents/com.courserag.api.plist
+launchctl load -w ~/Library/LaunchAgents/com.courserag.api.plist
+
+# —— 改了 plist 后生效(unload→拷新→load) ——
+cp "$APP"/scripts/launchd/com.courserag.api.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.courserag.api.plist
+launchctl load   -w ~/Library/LaunchAgents/com.courserag.api.plist
+
+# —— 查 runner ——
+cd ~/actions-runner && ./svc.sh status
+
+# —— 回滚到上一个版本 ——
+cd "$APP" && git revert HEAD && git push origin main   # 触发一次自动部署回退
+```
+
+## 常见故障
+
+- **公网 `ERR_NGROK_3200`(隧道 offline)**:ngrok 服务没起。看 `ngrok.err.log`。
+- **`ERR_NGROK_9009`(authentication failed, proxy)**:免费版 ngrok 不能走代理。系统开了全局代理(如 ClashX)时,launchd 进程会继承——plist 里已用空的 `http_proxy/https_proxy/all_proxy` 屏蔽;若复发,确认 plist 的 `EnvironmentVariables` 仍在。
+- **API 重启后短暂 502/连不上**:正常,embedding 模型加载约 10–15s,健康检查会等。
+- **deploy job 排队不动**:Mac 没开机/休眠,或 runner 服务停了(`./svc.sh status`)。
+
+## 安全提醒(本套特有)
+
+- 仓库**必须 Private**:self-hosted runner 会执行仓库 workflow,公开仓库等于让任何人在你 Mac 上跑代码。
+- Mac 需保持开机联网,否则部署排队、隧道断开。
+- 密钥放本地 `.env`(launchd 从 `backend/` 向上加载),**不进 GitHub Secrets、不进 git**。
