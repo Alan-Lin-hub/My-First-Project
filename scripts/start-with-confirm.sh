@@ -10,6 +10,7 @@
 # 用法:
 #   ./scripts/start-with-confirm.sh
 #   ./scripts/start-with-confirm.sh --force
+#   ./scripts/start-with-confirm.sh --yes --no-ngrok
 #
 set -euo pipefail
 
@@ -17,17 +18,34 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATE_DIR="$ROOT/.service-state"
 STATE_FILE="$STATE_DIR/last-started-commit"
 FORCE=0
+AUTO_CONFIRM=0
+START_NGROK=1
 
-if [[ "${1:-}" == "--force" ]]; then
-  FORCE=1
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force)
+      FORCE=1
+      ;;
+    --yes)
+      AUTO_CONFIRM=1
+      ;;
+    --no-ngrok|--local-only)
+      START_NGROK=0
+      ;;
+    *)
+      echo "未知参数: $1" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 mkdir -p "$STATE_DIR"
 cd "$ROOT"
 
 CURRENT_HEAD="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 HAS_UNCOMMITTED=0
-if ! git diff --quiet --ignore-submodules -- || ! git diff --cached --quiet --ignore-submodules --; then
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   HAS_UNCOMMITTED=1
 fi
 
@@ -47,18 +65,26 @@ fi
 
 if [[ "$NEEDS_CONFIRM" -eq 1 ]]; then
   echo "检测到代码变更或首次启动。"
-  read -r -p "是否启动服务？[y/N] " answer
-  case "$answer" in
-    [Yy]|[Yy][Ee][Ss])
-      ;;
-    *)
-      echo "已取消启动。"
-      exit 0
-      ;;
-  esac
+  if [[ "$AUTO_CONFIRM" -eq 1 ]]; then
+    echo "已自动确认启动。"
+  else
+    read -r -p "是否启动服务？[y/N] " answer
+    case "$answer" in
+      [Yy]|[Yy][Ee][Ss])
+        ;;
+      *)
+        echo "已取消启动。"
+        exit 0
+        ;;
+    esac
+  fi
 fi
 
 echo "→ 启动服务..."
-"$ROOT/scripts/start-local.sh"
+START_ARGS=("$ROOT/scripts/start-local.sh")
+if [[ "$START_NGROK" -eq 0 ]]; then
+  START_ARGS+=("--no-ngrok")
+fi
+"${START_ARGS[@]}"
 echo "$CURRENT_HEAD" > "$STATE_FILE"
 echo "已记录本次启动提交: $CURRENT_HEAD"

@@ -304,3 +304,5 @@ cd "$APP" && git revert HEAD && git push origin main   # 触发一次自动部�
 - 仓库**必须 Private**:self-hosted runner 会执行仓库 workflow,公开仓库等于让任何人在你 Mac 上跑代码。
 - Mac 需保持开机联网,否则部署排队、隧道断开。
 - 密钥放本地 `.env`(launchd 从 `backend/` 向上加载),**不进 GitHub Secrets、不进 git**。
+
+test1

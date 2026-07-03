@@ -43,6 +43,23 @@ chmod +x run.sh
 ./run.sh
 ```
 
+### Local start options
+
+If you want the service to start only when you confirm it, use:
+```bash
+./scripts/start-with-confirm.sh
+```
+
+If you want to start only the local backend without the public ngrok tunnel:
+```bash
+./scripts/start-local-only.sh
+```
+
+To stop the service:
+```bash
+./scripts/stop-local.sh
+```
+
 ### Manual Start
 
 ```bash
