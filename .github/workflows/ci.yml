@@ -26,13 +26,18 @@ jobs:
       - name: Test (pytest)
         run: uv run pytest -q
 
-  # CD: deploy to the local Mac via a self-hosted runner. Only runs on a push to
-  # main and only after `test` passes. No checkout — the deploy script operates
-  # on the real deploy directory in place (keeps chroma_db / users.db / .env).
+  # CD: SSH into the AWS Lightsail instance and run deploy.sh (git pull → uv sync
+  # → systemctl restart → health check). Only on a push to main, after `test`
+  # passes. Runs on a GitHub-hosted runner — no dependency on any local machine.
   deploy:
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: [self-hosted, macOS]
+    runs-on: ubuntu-latest
     steps:
-      - name: Deploy on local Mac
-        run: "/Users/linsen/开发工具/My-First-Project/scripts/deploy-mac.sh"
+      - name: SSH deploy to Lightsail
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: cd /opt/course-rag && bash scripts/deploy.sh
